@@ -115,3 +115,7 @@ tests/test-safeguards
 ## License
 
 MIT
+
+## Host services
+
+See the [host-service build recipes](packaging/host-services/README.md) for the Arch package candidates and GitHub Actions workflow.

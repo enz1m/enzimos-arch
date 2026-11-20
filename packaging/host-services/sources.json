@@ -1,0 +1,26 @@
+{
+  "enzimos-app-permissions": {
+    "commit": "7df9dcbe5710c7030220dfbe38be965c502a74d7",
+    "version": "0.2.0",
+    "release": 1,
+    "rust": "1.95.0"
+  },
+  "enzimos-background-apps": {
+    "commit": "9d622c049991e822f0330d1849ba2c5cefbbb7ef",
+    "version": "0.2.0",
+    "release": 1,
+    "rust": "1.95.0"
+  },
+  "enzui-mcp-center": {
+    "commit": "cd9839c7769c3c2f1beb2e3f5809b3015f9c9571",
+    "version": "0.1.0",
+    "release": 13,
+    "rust": "1.95.0"
+  },
+  "enzimos-phone-link": {
+    "commit": "e31aaf00c025f77cd911fc0d65a68ab64d80dc1e",
+    "version": "0.1.0",
+    "release": 1,
+    "rust": "1.99.1"
+  }
+}

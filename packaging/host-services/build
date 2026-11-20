@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+# Read only pinned public inputs. Build and test packages as a non-root user.
+set -euo pipefail
+
+recipe_dir=$(cd -- "$(dirname -- "$0")" && pwd)
+service=${2:-${HOST_SERVICE:-}}
+case "$service" in
+    enzimos-app-permissions)
+        description='enzimOS native application permissions'
+        dependencies=(glibc gcc-libs glib2 flatpak)
+        build_dependencies=(flatpak)
+        ;;
+    enzimos-background-apps)
+        description='enzimOS background application controls'
+        dependencies=(glibc gcc-libs dbus-units systemd)
+        build_dependencies=(flatpak dbus)
+        ;;
+    enzui-mcp-center)
+        description='Per-user enzUI capability broker and MCP stdio adapter'
+        dependencies=(glibc gcc-libs systemd)
+        build_dependencies=(dbus)
+        ;;
+    enzimos-phone-link)
+        description='enzimOS paired phone sharing and native app streaming'
+        dependencies=(glibc gcc-libs systemd-libs wayland libxkbcommon mesa libnotify fontconfig
+            vulkan-icd-loader libei libnice 'gstreamer>=1.28' gst-plugin-va gst-plugins-base-libs
+            gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav gst-plugin-pipewire
+            xdg-desktop-portal xdg-desktop-portal-hyprland python python-dbus python-gobject)
+        build_dependencies=(gstreamer gst-plugins-base-libs gst-plugins-bad-libs gst-plugins-good
+            libei libxkbcommon wayland libnotify fontconfig mesa vulkan-icd-loader
+            python-dbus python-gobject)
+        ;;
+    *) echo 'Unknown host service.' >&2; exit 1 ;;
+esac
+if [[ $1 == install-deps ]]; then
+    pacman -Syu --noconfirm --needed git curl jq python rustup "${build_dependencies[@]}"
+    exit
+fi
+[[ $EUID != 0 ]]
+read -r commit version release rust < <(jq -er --arg service "$service"     '.[$service] | [.commit,.version,.release,.rust] | @tsv' "$recipe_dir/sources.json")
+[[ $commit =~ ^[0-9a-f]{40}$ && $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$     && $release =~ ^[1-9][0-9]*$ && $rust =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+export RUSTUP_TOOLCHAIN="$rust" CARGO_BUILD_JOBS=4 GIT_ALLOW_PROTOCOL=https
+source_url="https://github.com/enz1m/$service"
+base="$HOME/host-service"
+source_dir="$base/source"
+protocol_root="$base/compositor"
+protocols="$protocol_root/vendor/Hyprland/protocols"
+protocol_commit=83cf6a6ed540dc37808434259c6a3ba663de9616
+if [[ $1 == prepare ]]; then
+    mkdir -p "$source_dir"
+    git -C "$source_dir" init -q
+    git -C "$source_dir" fetch --quiet --depth 1 "$source_url.git" "$commit"
+    git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
+    [[ $(git -C "$source_dir" rev-parse HEAD) == "$commit" ]]
+    rustup toolchain install "$rust" --profile minimal --no-self-update
+    (cd "$source_dir" && cargo fetch --locked)
+    if [[ $service == enzimos-phone-link ]]; then
+        mkdir -p "$protocols"
+        while read -r sum file; do
+            curl --fail --silent --show-error --retry 3 \
+              "https://raw.githubusercontent.com/hyprwm/Hyprland/$protocol_commit/protocols/$file" \
+              -o "$protocols/$file"
+        done < "$recipe_dir/phone-protocols.sha256"
+        (cd "$protocols" && sha256sum --check "$recipe_dir/phone-protocols.sha256")
+    fi
+    exit
+fi
+[[ $1 == package && $(git -C "$source_dir" rev-parse HEAD) == "$commit" ]]
+cd "$source_dir"
+export SOURCE_DATE_EPOCH
+SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
+cargo build --release --locked --offline --workspace --all-features --bins
+if [[ $service == enzimos-phone-link ]]; then
+    cargo test --release --locked --offline --workspace --all-features --lib
+    python -m unittest discover -s packaging -p test_start_host.py
+else
+    cargo test --release --locked --offline --all-features --all-targets
+fi
+
+output=${HOST_PACKAGE_OUTPUT:-/output}
+assembly="$base/assembly"
+payload="$assembly/payload"
+mkdir -p "$payload" "$output"
+copy() { install -Dm "$3" -- "$1" "$payload/$2"; }
+license=MIT
+case "$service" in
+    enzimos-app-permissions)
+        copy target/release/enzimos-app-permissions usr/bin/enzimos-app-permissions 0755
+        ;;
+    enzimos-background-apps)
+        copy target/release/enzimos-background usr/bin/enzimos-background 0755
+        for binary in enzimos-background-service enzimos-background-trust; do
+            copy "target/release/$binary" "usr/lib/enzimos-background/$binary" 0755
+        done
+        copy packaging/enzimos-background-apps.service usr/lib/systemd/user/enzimos-background-apps.service 0644
+        copy packaging/enzimos-background-trust.service usr/lib/systemd/system/enzimos-background-trust.service 0644
+        copy packaging/20-enzimos-background.preset usr/lib/systemd/system-preset/20-enzimos-background.preset 0644
+        copy packaging/systemd-user-sessions-background.conf usr/lib/systemd/system/systemd-user-sessions.service.d/20-enzimos-background-trust.conf 0644
+        copy packaging/org.enzimos.Background1.service usr/share/dbus-1/services/org.enzimos.Background1.service 0644
+        copy packaging/org.enzimos.Background1.json usr/share/enzui/lifecycle-callers/org.enzimos.Background1.json 0644
+        ;;
+    enzui-mcp-center)
+        license='MIT OR Apache-2.0'
+        for binary in enzui-center enzui-mcp; do
+            copy "target/release/$binary" "usr/bin/$binary" 0755
+        done
+        copy packaging/background-policy.json usr/share/enzui/mcp-center/background-policy.json 0644
+        copy packaging/enzui-center.service usr/lib/systemd/user/enzui-center.service 0644
+        copy packaging/enzui-agent-flatpak@.service usr/lib/systemd/user/enzui-agent-flatpak@.service 0644
+        ;;
+    enzimos-phone-link)
+        license='MIT OR Apache-2.0'
+        for binary in enzremote-signaling enzremote-webrtc-server enzremote-uplink; do
+            copy "target/release/$binary" "usr/libexec/enzimos-phone-link/$binary" 0755
+        done
+        for worker in input-wl input-pointer input-eis screencopy; do
+            ENZUI_COMPOSITOR_SETUP_DIR="$protocol_root" "scripts/build-$worker"
+            copy "target/$worker/enzremote-$worker" "usr/libexec/enzimos-phone-link/enzremote-$worker" 0755
+        done
+        for helper in desktop-input portal-session-helper xdph-output-picker; do
+            copy "scripts/$helper" "usr/libexec/enzimos-phone-link/$helper" 0755
+        done
+        copy packaging/start-host usr/libexec/enzimos-phone-link/start-host 0755
+        copy packaging/org.enzimos.PhoneLink.desktop usr/share/applications/org.enzimos.PhoneLink.desktop 0644
+        copy packaging/org.enzimos.PhoneLink.svg usr/share/icons/hicolor/scalable/apps/org.enzimos.PhoneLink.svg 0644
+        copy packaging/enzimos-phone-link.xml usr/lib/firewalld/services/enzimos-phone-link.xml 0644
+        copy packaging/enzimos-phone-link.service usr/lib/systemd/user/enzimos-phone-link.service 0644
+        copy packaging/90-enzimos-phone-link.preset usr/lib/systemd/user-preset/90-enzimos-phone-link.preset 0644
+        # Preserve the licenses of the two pinned Git codebases linked into the app.
+        cargo metadata --locked --offline --format-version 1 --filter-platform x86_64-unknown-linux-gnu > "$base/cargo-metadata.json"
+        for crate in enzui-core iced; do
+            manifest=$(jq -er --arg crate "$crate" '.packages[] | select(.name == $crate and (.source // "" | startswith("git+https://github.com/enz1m/"))) | .manifest_path' "$base/cargo-metadata.json")
+            project=$(git -C "$(dirname -- "$manifest")" rev-parse --show-toplevel)
+            copy "$project/LICENSE" "usr/share/licenses/$service/$crate-LICENSE" 0644
+        done
+        ;;
+esac
+for file in LICENSE*; do copy "$file" "usr/share/licenses/$service/$file" 0644; done
+copy README.md "usr/share/doc/$service/README.md" 0644
+cd "$assembly"
+{
+    printf 'pkgname=%q\npkgver=%q\npkgrel=%q\npkgdesc=%q\nurl=%q\n' "$service" "$version" "$release" "$description" "$source_url"
+    printf "arch=('x86_64')\nlicense=(%q)\n" "$license"
+    printf 'depends=('; printf ' %q' "${dependencies[@]}"; printf ' )\n'
+    printf "options=(!debug)\npackage() { cp -a --no-preserve=ownership \"\$startdir/payload/.\" \"\$pkgdir/\"; }\n"
+} > PKGBUILD
+PKGDEST="$output" makepkg --nodeps --noconfirm --nosign
+package="$service-$version-$release-x86_64.pkg.tar.zst"
+[[ -s "$output/$package" ]]
+pacman -Qip "$output/$package"
+sha=$(sha256sum "$output/$package" | cut -d ' ' -f 1)
+jq -n --arg name "$service" --arg file "$package" --arg sha "$sha" --arg commit "$commit"     --arg source "$source_url" --arg rust "$rust" --argjson release "$release" --arg version "$version"     '{schema:1,package_name:$name,package:$file,sha256:$sha,revision:$commit,source:$source,rust:$rust,
+       version:$version,release:$release,release_authorized:false}' > "$output/build.json"
+pacman -Q > "$output/build-environment.txt"

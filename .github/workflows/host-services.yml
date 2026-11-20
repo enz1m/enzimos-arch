@@ -1,0 +1,79 @@
+name: Build native host services
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/host-services.yml
+      - packaging/host-services/**
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - enzimos-app-permissions
+          - enzimos-background-apps
+          - enzui-mcp-center
+          - enzimos-phone-link
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Verify the build and service source commits
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERVICE: ${{ matrix.service }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" | jq -e '.commit.verification.verified'
+          commit=$(jq -er --arg service "$SERVICE" '.[$service].commit' packaging/host-services/sources.json)
+          gh api "repos/enz1m/$SERVICE/commits/$commit" | jq -e '.commit.verification.verified'
+      - name: Prepare the pinned Arch build environment
+        env:
+          SERVICE: ${{ matrix.service }}
+        run: |
+          docker build --pull --build-arg "SERVICE=$SERVICE" \
+            -f packaging/host-services/Dockerfile --tag "native-builder:$SERVICE" .
+      - name: Test and build offline
+        env:
+          SERVICE: ${{ matrix.service }}
+        run: |
+          output="$RUNNER_TEMP/host-package"
+          install -d -m 0777 "$output"
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+            --mount "type=bind,source=$output,target=/output" "native-builder:$SERVICE"
+      - name: Upload the package and build receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: host-service-${{ matrix.service }}
+          path: |
+            ${{ runner.temp }}/host-package/*.pkg.tar.zst
+            ${{ runner.temp }}/host-package/build.json
+            ${{ runner.temp }}/host-package/build-environment.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  attest:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a248896c90dbdf5c8093 # v4
+        with:
+          pattern: host-service-*
+          path: ${{ runner.temp }}/native-artifacts
+      - name: Attest the package bytes and build receipts
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: |
+            ${{ runner.temp }}/native-artifacts/**/*.pkg.tar.zst
+            ${{ runner.temp }}/native-artifacts/**/build.json
+            ${{ runner.temp }}/native-artifacts/**/build-environment.txt
