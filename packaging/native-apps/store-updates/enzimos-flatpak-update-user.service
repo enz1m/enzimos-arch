@@ -1,0 +1,11 @@
+[Unit]
+Description=Update your Flatpak apps
+ConditionPathExists=/usr/bin/flatpak
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/enzimos-store/flatpak-auto-update user
+Nice=19
+CPUSchedulingPolicy=idle
+IOSchedulingClass=idle
+TimeoutStartSec=2h

@@ -1,0 +1,81 @@
+name: Build native desktop apps
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/native-apps.yml
+      - packaging/native-apps/**
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        app:
+          - enzimos-files
+          - enzimos-store
+          - enzimos-task-manager
+          - enzimos-terminal
+          - enzimos-text
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Verify the build and app source commits
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP: ${{ matrix.app }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" | jq -e '.commit.verification.verified'
+          commit=$(jq -er --arg service "$APP" '.[$service].commit' packaging/native-apps/sources.json)
+          repo=$(jq -er --arg app "$APP" '.[$app].repo' packaging/native-apps/sources.json)
+          gh api "repos/enz1m/$repo/commits/$commit" | jq -e '.commit.verification.verified'
+      - name: Prepare the pinned Arch build environment
+        env:
+          APP: ${{ matrix.app }}
+        run: |
+          docker build --pull --build-arg "APP=$APP" \
+            -f packaging/native-apps/Dockerfile --tag "native-builder:$APP" .
+      - name: Test and build offline
+        env:
+          APP: ${{ matrix.app }}
+        run: |
+          output="$RUNNER_TEMP/app-package"
+          install -d -m 0777 "$output"
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+            --mount "type=bind,source=$output,target=/output" "native-builder:$APP"
+      - name: Upload the package and build receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-app-${{ matrix.app }}
+          path: |
+            ${{ runner.temp }}/app-package/*.pkg.tar.zst
+            ${{ runner.temp }}/app-package/build.json
+            ${{ runner.temp }}/app-package/build-environment.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  attest:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: native-app-*
+          path: ${{ runner.temp }}/native-artifacts
+      - name: Attest the package bytes and build receipts
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: |
+            ${{ runner.temp }}/native-artifacts/**/*.pkg.tar.zst
+            ${{ runner.temp }}/native-artifacts/**/build.json
+            ${{ runner.temp }}/native-artifacts/**/build-environment.txt

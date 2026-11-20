@@ -1,0 +1,14 @@
+[Unit]
+Description=Update system-wide Flatpak apps
+Documentation=https://flatpak.org
+ConditionPathExists=/usr/bin/flatpak
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/enzimos-store/flatpak-auto-update system
+Nice=19
+CPUSchedulingPolicy=idle
+IOSchedulingClass=idle
+TimeoutStartSec=2h

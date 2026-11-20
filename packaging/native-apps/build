@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+
+recipe_dir=$(cd -- "$(dirname -- "$0")" && pwd)
+app=${2:-${NATIVE_APP:-}}
+dependencies=(glibc gcc-libs wayland libxkbcommon mesa fontconfig vulkan-icd-loader)
+build_dependencies=(glib2 wayland libxkbcommon mesa fontconfig vulkan-icd-loader)
+optional=()
+features=()
+case "$app" in
+    enzimos-files)
+        binary=files-app entry=Files description='enzUI file manager'
+        features=(--features center)
+        dependencies+=(libarchive glib2 systemd-libs gstreamer gst-plugins-base-libs curl poppler-glib libheif)
+        build_dependencies+=(libarchive systemd-libs gstreamer gst-plugins-base-libs curl poppler-glib libheif)
+        optional=('udisks2: mount disk images' 'yt-dlp: inspect media-service URLs' 'ffmpeg: merge media streams')
+        ;;
+    enzimos-terminal)
+        binary=terminal-emulator entry=Terminal description='enzUI terminal emulator'
+        features=(--features center)
+        dependencies+=(bash ncurses openssh)
+        ;;
+    enzimos-store)
+        binary=store-app entry=Store description='enzUI application Store'
+        dependencies+=(enzimos-app-permissions flatpak curl)
+        build_dependencies+=(flatpak curl)
+        ;;
+    enzimos-text)
+        binary=text-app entry=Text description='enzUI text editor'
+        ;;
+    enzimos-task-manager)
+        binary=task-manager-app entry=TaskManager description='enzUI system monitor'
+        ;;
+    *) echo 'Unknown native desktop app.' >&2; exit 1 ;;
+esac
+
+if [[ $1 == install-deps ]]; then
+    pacman -Syu --noconfirm --needed git jq python rustup desktop-file-utils "${build_dependencies[@]}"
+    exit
+fi
+[[ $EUID != 0 ]]
+read -r repo commit version release rust < <(
+    jq -er --arg app "$app" '.[$app] | [.repo,.commit,.version,.release,.rust] | @tsv' "$recipe_dir/sources.json"
+)
+[[ $repo == "${app#enzimos-}" && $commit =~ ^[0-9a-f]{40}$ && $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ &&
+    $release =~ ^[1-9][0-9]*$ && $rust =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+export RUSTUP_TOOLCHAIN="$rust" CARGO_BUILD_JOBS=4 GIT_ALLOW_PROTOCOL=https
+source_url="https://github.com/enz1m/$repo"
+base="$HOME/native-app"
+source_dir="$base/source"
+if [[ $1 == prepare ]]; then
+    mkdir -p "$source_dir"
+    git -C "$source_dir" init -q
+    git -C "$source_dir" fetch --quiet --depth 1 "$source_url.git" "$commit"
+    git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
+    [[ $(git -C "$source_dir" rev-parse HEAD) == "$commit" ]]
+    rustup toolchain install "$rust" --profile minimal --no-self-update
+    (cd "$source_dir" && cargo fetch --locked)
+    exit
+fi
+[[ $1 == package && $(git -C "$source_dir" rev-parse HEAD) == "$commit" ]]
+cd "$source_dir"
+export SOURCE_DATE_EPOCH
+SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
+cargo build --release --locked --offline "${features[@]}" --bin "$binary"
+cargo test --release --locked --offline "${features[@]}"
+
+output=${NATIVE_PACKAGE_OUTPUT:-/output}
+assembly="$base/assembly"
+payload="$assembly/payload"
+mkdir -p "$payload" "$output"
+copy() { install -Dm "$3" -- "$1" "$payload/$2"; }
+executable="/usr/lib/enzui/apps/$binary"
+if [[ $app == enzimos-store ]]; then executable=/usr/bin/store-app; fi
+copy "target/release/$binary" "${executable#/}" 0755
+case "$app" in
+    enzimos-terminal)
+        printf '#!/bin/sh\nexec /usr/lib/enzui/apps/terminal-emulator "$@"\n' > "$assembly/terminal-emulator"
+        copy "$assembly/terminal-emulator" usr/bin/terminal-emulator 0755
+        ;;
+    enzimos-store)
+        updater="$recipe_dir/store-updates"
+        copy "$updater/flatpak-auto-update" usr/lib/enzimos-store/flatpak-auto-update 0755
+        for kind in system user; do
+            unit=enzimos-flatpak-update
+            if [[ $kind == user ]]; then unit+=-user; fi
+            for suffix in service timer; do
+                copy "$updater/$unit.$suffix" "usr/lib/systemd/$kind/$unit.$suffix" 0644
+            done
+            wants="$payload/usr/lib/systemd/$kind/timers.target.wants"
+            mkdir -p "$wants"
+            ln -s "../$unit.timer" "$wants/$unit.timer"
+        done
+        ;;
+esac
+id="io.github.enzui.$entry"
+sed -E "s|^(Exec|TryExec)=$binary( |$)|\1=$executable\2|" "assets/$id.desktop" > "$assembly/$id.desktop"
+desktop-file-validate "$assembly/$id.desktop"
+copy "$assembly/$id.desktop" "usr/share/applications/$id.desktop" 0644
+copy "assets/$id.metainfo.xml" "usr/share/metainfo/$id.metainfo.xml" 0644
+copy "assets/$id.svg" "usr/share/icons/hicolor/scalable/apps/$id.svg" 0644
+copy LICENSE "usr/share/licenses/$app/LICENSE" 0644
+copy README.md "usr/share/doc/$app/README.md" 0644
+
+# Include the notices from the exact framework and Iced Git dependencies.
+cargo metadata --locked --offline --format-version 1 --filter-platform x86_64-unknown-linux-gnu \
+    "${features[@]}" > "$base/metadata.json"
+for crate in enzui-core iced; do
+    manifest=$(jq -er --arg crate "$crate" '.packages[] | select(.name == $crate and (.source // "" | startswith("git+https://github.com/enz1m/"))) | .manifest_path' "$base/metadata.json")
+    project=$(git -C "$(dirname -- "$manifest")" rev-parse --show-toplevel)
+    copy "$project/LICENSE" "usr/share/licenses/$app/$crate-LICENSE" 0644
+    if [[ $crate == iced ]]; then
+        copy "$project/graphics/fonts/FiraSans-Regular.OFL.txt" "usr/share/licenses/$app/FiraSans-OFL.txt" 0644
+    fi
+done
+cd "$assembly"
+{
+    printf 'pkgname=%q\npkgver=%q\npkgrel=%q\npkgdesc=%q\nurl=%q\n' "$app" "$version" "$release" "$description" "$source_url"
+    printf "arch=('x86_64')\nlicense=('MIT')\n"
+    printf 'depends=('; printf ' %q' "${dependencies[@]}"; printf ' )\n'
+    if (( ${#optional[@]} )); then
+        printf 'optdepends=('; printf ' %q' "${optional[@]}"; printf ' )\n'
+    fi
+    printf "options=(!debug)\npackage() { cp -a --no-preserve=ownership \"\$startdir/payload/.\" \"\$pkgdir/\"; }\n"
+} > PKGBUILD
+PKGDEST="$output" makepkg --nodeps --noconfirm --nosign
+package="$app-$version-$release-x86_64.pkg.tar.zst"
+pacman -Qip "$output/$package"
+sha=$(sha256sum "$output/$package" | cut -d ' ' -f 1)
+jq -n --arg name "$app" --arg file "$package" --arg sha "$sha" --arg commit "$commit" \
+    --arg source "$source_url" --arg rust "$rust" --argjson release "$release" --arg version "$version" \
+    '{schema:1,package_name:$name,package:$file,sha256:$sha,revision:$commit,source:$source,rust:$rust,
+      version:$version,release:$release,release_authorized:false}' > "$output/build.json"
+pacman -Q > "$output/build-environment.txt"

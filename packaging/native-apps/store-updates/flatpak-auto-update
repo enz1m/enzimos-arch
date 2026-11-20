@@ -1,0 +1,37 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Updates the Flatpak apps of one installation in the background, unless the
+# connection is metered or automatic updates are turned off in Store. A
+# running app keeps its current version until it exits; Flatpak removes the
+# old one once nothing uses it.
+set -eu
+scope="${1:-}"
+case "$scope" in
+    system|user) ;;
+    *) echo "usage: $0 system|user" >&2; exit 2 ;;
+esac
+# Store's switch, "off" in this file under its data folder.
+setting=store-app/automatic-updates
+turned_off() { [ -r "$1" ] && [ "$(head -c 16 "$1" | tr -d '[:space:]')" = off ]; }
+if [ "$scope" = user ]; then
+    if turned_off "${XDG_DATA_HOME:-$HOME/.local/share}/$setting"; then
+        echo "automatic updates are turned off in Store: skipping"; exit 0
+    fi
+else
+    # Apps installed for everyone: any account that turned it off is respected.
+    uid_min=$(awk '$1 == "UID_MIN" {print $2}' /etc/login.defs 2>/dev/null)
+    homes=$(getent passwd | awk -F: -v min="${uid_min:-1000}" '$3 >= min && $3 < 60000 {print $6}')
+    for home in $homes; do
+        if turned_off "$home/.local/share/$setting"; then
+            echo "automatic updates are turned off in Store for $home: skipping"; exit 0
+        fi
+    done
+fi
+# NetworkManager's Metered property: 1 yes, 3 guessed yes.
+metered=$(busctl --system get-property org.freedesktop.NetworkManager \
+    /org/freedesktop/NetworkManager org.freedesktop.NetworkManager Metered 2>/dev/null \
+    | cut -d' ' -f2) || metered=
+case "$metered" in
+    1|3) echo "metered connection: skipping"; exit 0 ;;
+esac
+exec flatpak update "--$scope" --noninteractive
