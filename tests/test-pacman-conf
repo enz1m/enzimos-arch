@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# The repository section enzimos-try adds to pacman.conf is removed exactly,
+# leaving the user's file as it was.
+set -euo pipefail
+here=$(cd "$(dirname "$0")/.." && pwd)
+work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+# shellcheck source=../enzimos-try
+source "$here/enzimos-try"
+PACMAN_CONF=$work/pacman.conf REPO_CONF=$work/enzimos-repo.conf STATE=$work/state
+printf '[options]\nArchitecture = auto\n\n[core]\nInclude = /etc/pacman.d/mirrorlist\n\n\n' > "$PACMAN_CONF"
+cp "$PACMAN_CONF" "$work/original"
+touch "$STATE"
+# The key is absent: add_repo imports it, then later functions still run
+# under set -u (a RETURN trap left by add_repo once broke them).
+pacman-key() { [[ $1 == --list-keys ]] && return 1; return 0; }
+gpg() { printf 'pub::::::::::\nfpr:::::::::%s:\n' "$KEY_FINGERPRINT"; }
+ENZIMOS_KEY_FILE=$work/key.asc; echo key > "$ENZIMOS_KEY_FILE"
+# As install() does: a function that calls add_repo, then returns.
+calls_add_repo() { add_repo >/dev/null; }
+calls_add_repo
+grep -qx '\[enzimos\]' "$PACMAN_CONF" || { echo "FAIL: section not added"; exit 1; }
+grep -qx "Include = $REPO_CONF" "$PACMAN_CONF" || { echo "FAIL: include not added"; exit 1; }
+grep -qx 'SigLevel = Required' "$REPO_CONF"
+[[ $(grep -c '^\[enzimos\]' "$PACMAN_CONF" "$REPO_CONF" | awk -F: '{s+=$2} END {print s}') == 1 ]] || { echo "FAIL: duplicate section header"; exit 1; }
+add_repo >/dev/null   # a second run adds nothing
+[[ $(grep -c '^\[enzimos\]' "$PACMAN_CONF") == 1 ]] || { echo "FAIL: added twice"; exit 1; }
+remove_repo
+cmp -s "$PACMAN_CONF" "$work/original" || { echo "FAIL: pacman.conf differs after removal"; diff "$work/original" "$PACMAN_CONF"; exit 1; }
+[[ ! -e $REPO_CONF ]] || { echo "FAIL: repo file left behind"; exit 1; }
+echo "ok pacman.conf add/remove"
+
+# Key enrollment accepts exactly one reviewed public primary.
+: > "$STATE"
+gpg() {
+    printf 'pub::::::::::\nfpr:::::::::%s:\npub::::::::::\nfpr:::::::::%s:\n'         "$KEY_FINGERPRINT" "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+}
+if (add_repo) > "$work/unreviewed-key.log" 2>&1; then
+    echo "FAIL: enrolled extra primary key"
+    exit 1
+fi
+cmp "$PACMAN_CONF" "$work/original"
+[[ ! -s $STATE && ! -e $REPO_CONF ]]
+echo "ok unexpected keys refused before enrollment"
+
+
+# A repository configured before this installer is not adopted or removed.
+printf '[options]\nArchitecture = auto\n\n[enzimos]\nServer = https://existing.example/arch\n' > "$PACMAN_CONF"
+printf 'existing custom include\n' > "$REPO_CONF"
+cp "$PACMAN_CONF" "$work/existing"
+: > "$STATE"
+pacman-key() { return 0; }
+add_repo >/dev/null
+remove_repo
+cmp "$PACMAN_CONF" "$work/existing"
+grep -qx 'existing custom include' "$REPO_CONF"
+grep -qx 'repository: configured (https://existing.example/arch)' <<< "$(status)"
+echo "ok pre-existing repository preserved and reported"
+
+# An administrator can keep the config behind a link and omit the final newline.
+PACMAN_CONF=$work/pacman-link REPO_CONF=$work/signed-include
+printf '[options]\nArchitecture = auto' > "$work/pacman-custom"
+cp "$work/pacman-custom" "$work/no-final-newline"
+ln -s "$work/pacman-custom" "$PACMAN_CONF"
+add_repo >/dev/null
+remove_repo
+[[ -L $PACMAN_CONF ]]
+cmp "$work/pacman-custom" "$work/no-final-newline"
+echo "ok config link and final newline preserved"
+
+# A change inside the managed block must survive removal for manual review.
+add_repo >/dev/null
+sed -i '/^\[enzimos\]$/a # administrator added this' "$work/pacman-custom"
+cp "$work/pacman-custom" "$work/edited"
+if (remove_repo) >/dev/null 2>&1; then
+    echo "FAIL: removal changed an edited repository block"
+    exit 1
+fi
+cmp "$work/pacman-custom" "$work/edited"
+[[ -f $REPO_CONF && -s $STATE ]]
+echo "ok changed repository block preserved"

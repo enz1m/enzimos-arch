@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# --greeter switches the login manager to greetd and remove restores the one
+# that was active, without stopping either.
+# Sabotage: drop the "display-manager" line written to STATE in switch_to_greeter.
+set -euo pipefail
+here=$(cd "$(dirname "$0")/.." && pwd)
+work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+# shellcheck source=../enzimos-try
+source "$here/enzimos-try"
+STATE=$work/state DM_LINK=$work/display-manager.service
+touch "$STATE"
+ln -s /usr/lib/systemd/system/sddm.service "$DM_LINK"
+systemctl() { echo "$*" >> "$work/calls"; }
+switch_to_greeter >/dev/null
+[[ $(cat "$work/calls") == $'disable sddm.service\nenable greetd.service' ]] || { echo "FAIL: switch calls: $(cat "$work/calls")"; exit 1; }
+: > "$work/calls"
+restore_display_manager >/dev/null
+[[ $(cat "$work/calls") == $'disable greetd.service\nenable sddm.service' ]] || { echo "FAIL: restore calls: $(cat "$work/calls")"; exit 1; }
+# No login manager before (console login): nothing to re-enable.
+rm "$DM_LINK"; : > "$STATE"; : > "$work/calls"
+switch_to_greeter >/dev/null; restore_display_manager >/dev/null
+[[ $(cat "$work/calls") == $'enable greetd.service\ndisable greetd.service' ]] || { echo "FAIL: console case: $(cat "$work/calls")"; exit 1; }
+echo "ok display manager switch/restore"

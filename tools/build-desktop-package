@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Package an enzUI desktop export (enzimos-shell scripts/export-desktop) for
+an existing Arch-based system.
+
+    build-desktop-package EXPORT OUTPUT [--release N]
+
+OUTPUT/enzui-desktop: the session, shell, Settings, lock screen, compositor
+(enz-hyprland) and portal of the export. The user's own login manager lists the
+"enzUI" session.
+
+OUTPUT/enzimos-greeter (optional): the enzimOS login screen for greetd. Arch's
+greetd package owns /etc/greetd/config.toml, so the greeter brings its own
+/etc/greetd/enzui.toml and a greetd.service drop-in that selects it;
+`enzimos-try install --greeter` switches the login manager to greetd and
+`remove` switches it back.
+
+Dependencies come from the export's manifest: each shared library it needs is
+mapped to the installed package that owns it on the build machine (which must
+be the Arch release the repository targets), and each tool to the package
+owning it on PATH.
+"""
+import argparse
+import json
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+DEFAULT_BUILD_TOOLS = Path(__file__).resolve().parent.parent.parent.parent / 'tools'
+
+# Components of the export left out on a system with its own login manager.
+EXCLUDED_COMPONENTS = {'greeter'}
+# Tools only the left-out components use.
+EXCLUDED_TOOLS = {'greetd'}
+# Test frameworks an older compositor build linked; never loaded at runtime.
+TEST_ONLY = ('libgtest.so', 'libgmock.so')
+# Libraries whose version changes with every release while their Arch
+# packages declare no soname to depend on (abseil, glslang, SPIRV-Tools): the
+# package carries the build's copies in the compositor's private library
+# folder, as the enzimOS image does, so an Arch update cannot strand them.
+BUNDLED = ('libabsl_', 'libglslang', 'libSPIRV')
+# Libraries the export brings itself (the private compositor prefix).
+PRIVATE_PREFIX = '/usr/lib/enzui/compositor/'
+
+
+def owner(path):
+    out = subprocess.run(['pacman', '-Qqo', path], capture_output=True, text=True)
+    return out.stdout.strip() if out.returncode == 0 else None
+
+
+def library_owner(soname):
+    for directory in ('/usr/lib', '/usr/lib64'):
+        candidate = Path(directory) / soname
+        if candidate.exists():
+            return owner(str(candidate))
+    return None
+
+
+def needed(path):
+    out = subprocess.run(['readelf', '-d', str(path)], capture_output=True, text=True).stdout
+    return [line.split('[', 1)[1].split(']', 1)[0] for line in out.splitlines() if '(NEEDED)' in line]
+
+
+def bundle(sonames):
+    """The BUNDLED libraries among `sonames`, with the BUNDLED libraries they
+    need in turn: {soname: resolved file on the build machine}."""
+    found, queue = {}, [name for name in sonames if name.startswith(BUNDLED)]
+    while queue:
+        name = queue.pop()
+        if name in found:
+            continue
+        path = Path('/usr/lib') / name
+        if not path.exists():
+            raise SystemExit(f'{name} is not installed on the build machine')
+        found[name] = path.resolve()
+        queue += [n for n in needed(found[name]) if n.startswith(BUNDLED)]
+    return found
+
+
+def provided_soname(package, soname):
+    """The `libfoo.so=VERSION-64` entry `package` provides for `soname`, if any.
+    Depending on it, rather than on the package, makes pacman refuse an
+    upgrade that would replace the library version the desktop links."""
+    base, _, version = soname.partition('.so.')
+    if not version:
+        return None
+    out = subprocess.run(['pacman', '-Qi', package], capture_output=True, text=True).stdout
+    provides = next((line.split(':', 1)[1].split() for line in out.splitlines() if line.startswith('Provides')), [])
+    wanted = f'{base}.so={version}-64'
+    return wanted if wanted in provides else None
+
+
+def dependencies(manifest, private):
+    needs = manifest.get('runtime_dependencies', {})
+    packages, missing = set(), []
+    for soname in needs.get('shared_libraries', []):
+        if soname in private or soname.startswith(TEST_ONLY):
+            continue
+        name = library_owner(soname)
+        if name:
+            packages.add(provided_soname(name, soname) or name)
+        else:
+            missing.append(soname)
+    for tool in (t for t in needs.get('tools', []) if t not in EXCLUDED_TOOLS):
+        found = shutil.which(tool)
+        name = owner(found) if found else None
+        if name:
+            packages.add(name)
+        else:
+            missing.append(tool)
+    return sorted(packages), missing
+
+
+GREETD_DROPIN = """# enzimOS login screen (enzimos-greeter): greetd runs the enzUI greeter.
+[Service]
+ExecStart=
+ExecStart=/usr/bin/greetd --config /etc/greetd/enzui.toml
+"""
+
+
+def build_greeter(export, manifest, output, release, package):
+    files = []
+    for row in manifest['files']:
+        if row.get('component') != 'greeter':
+            continue
+        rel = row['path'].lstrip('/')
+        if rel == 'etc/greetd/config.toml':
+            files.append((export / rel, 'etc/greetd/enzui.toml', 0o644))
+        else:
+            files.append((export / rel, rel, int(row['mode'], 8)))
+    dropin = output.parent / 'greetd-enzui.conf'
+    output.parent.mkdir(parents=True, exist_ok=True)
+    dropin.write_text(GREETD_DROPIN)
+    files.append((dropin, 'usr/lib/systemd/system/greetd.service.d/enzui.conf', 0o644))
+    row = package(output, 'enzimos-greeter', files, ['enzui-desktop', 'greetd'], [],
+                  description='The enzimOS login screen for greetd', release=release,
+                  license_identifiers=('MIT',), backups=('etc/greetd/enzui.toml',))
+    (output / 'build.json').write_text(json.dumps({'status': 'PASS-enzimos-greeter-package-built', **row}, indent=2) + '\n')
+    return row
+
+
+def build(export, output, release, build_tools=DEFAULT_BUILD_TOOLS):
+    for module in ('build_ai_packages.py', 'stage_installed_desktop.py'):
+        if not (build_tools / module).is_file():
+            raise SystemExit('pass --build-tools with the enzimOS workspace tools directory')
+    sys.path.insert(0, str(build_tools))
+    from build_ai_packages import package
+    from stage_installed_desktop import verify_export
+
+    manifest_path = export / 'usr/share/enzui/manifest.json'
+    if (manifest_path.is_symlink() or not manifest_path.is_file()
+            or not manifest_path.resolve(strict=True).is_relative_to(export)):
+        raise SystemExit('desktop manifest must be a regular file within the export')
+    manifest = json.loads(manifest_path.read_text())
+    if manifest.get('schema') != 1 or manifest.get('source_tree_dirty') is not False:
+        raise SystemExit('expected a schema 1 desktop export from a clean source tree')
+    verify_export(export, manifest)
+    files, links, private = [], [], set()
+    for row in manifest['files']:
+        if row.get('component') in EXCLUDED_COMPONENTS:
+            continue
+        rel = row['path'].lstrip('/')
+        if row['type'] == 'symlink':
+            links.append((rel, row['target']))
+        else:
+            files.append((export / rel, rel, int(row['mode'], 8)))
+        if row['path'].startswith(PRIVATE_PREFIX):
+            private.add(Path(row['path']).name)
+    # The manifest itself lists the files the package installs.
+    manifest_rel = 'usr/share/enzui/manifest.json'
+    if not any(rel == manifest_rel for _, rel, _ in files):
+        files.append((export / manifest_rel, manifest_rel, 0o644))
+    output.mkdir(parents=True, exist_ok=True)
+    carried = bundle(manifest.get('runtime_dependencies', {}).get('shared_libraries', []))
+    for soname, source in sorted(carried.items()):
+        files.append((source, PRIVATE_PREFIX.lstrip('/') + 'prefix/lib/' + soname, 0o755))
+        private.add(soname)
+    depends, missing = dependencies(manifest, private)
+    # Portal backends and desktop utilities are discovered at runtime.
+    # Arch's xdg-desktop-portal-hyprland serves the portals enzUI's own do not
+    # (screenshots, screen casting, global shortcuts) through enz-hyprland.
+    # vulkan-swrast is the CPU Vulkan driver, as on enzimOS, for systems with
+    # no Vulkan driver (a VM without 3D); hardware drivers still win.
+    depends = sorted({*depends, 'xdg-desktop-portal', 'xdg-desktop-portal-gtk', 'xdg-desktop-portal-hyprland',
+                      'accountsservice', 'xdg-utils', 'polkit', 'vulkan-icd-loader', 'vulkan-swrast',
+                      'grim', 'hyprpicker', 'wl-clipboard'})
+    if missing:
+        raise SystemExit('no installed package provides: ' + ', '.join(missing))
+    # The export's notices are already among its files (usr/share/licenses/enzui-desktop).
+    row = package(output / 'enzui-desktop', 'enzui-desktop', files, depends, [],
+                  description='enzUI desktop session for Arch-based systems (enzimOS)', release=release,
+                  license_identifiers=('MIT', 'BSD-3-Clause'), links=links,
+                  optdepends=('enzimos-greeter: the enzimOS login screen',
+                              'networkmanager: network settings', 'bluez-utils: Bluetooth settings',
+                              'power-profiles-daemon: power modes', 'cups: printers',
+                              'firewalld: network trust (incoming connections)',
+                              'fcitx5: input methods', 'wf-recorder: screen recording'))
+    report = {'status': 'PASS-enzui-desktop-package-built', 'source_revision': manifest['source_revision'],
+              'bundled_libraries': sorted(carried),
+              'excluded_components': sorted(EXCLUDED_COMPONENTS), **row}
+    (output / 'enzui-desktop/build.json').write_text(json.dumps(report, indent=2) + '\n')
+    report['greeter'] = build_greeter(export, manifest, output / 'enzimos-greeter', release, package)
+    return report
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument('export', type=Path)
+    parser.add_argument('output', type=Path)
+    parser.add_argument('--release', type=int, default=1)
+    parser.add_argument('--build-tools', type=Path, default=DEFAULT_BUILD_TOOLS,
+                        help='tools directory from the enzimOS build workspace')
+    args = parser.parse_args()
+    report = build(args.export.resolve(strict=True), args.output.absolute(), args.release,
+                   args.build_tools.resolve())
+    print(json.dumps({'desktop': report['package'], 'greeter': report['greeter']['package'],
+                      'source_revision': report['source_revision']}))

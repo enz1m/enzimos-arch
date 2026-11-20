@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Boot a test VM for an Arch-based distribution with KVM and a 3D-capable display.
+#   test/vm install ISO     boot the ISO with a fresh 40 GiB disk (install by hand)
+#   test/vm run             boot the installed disk
+#   test/vm snapshot NAME   keep the installed disk as NAME (qemu-img snapshot)
+#   test/vm revert NAME     go back to NAME
+# Set ENZIMOS_ARCH_VM to override the default state directory.
+set -euo pipefail
+dir=${ENZIMOS_ARCH_VM:-${XDG_STATE_HOME:-$HOME/.local/state}/enzimos-arch/vm}
+disk=$dir/disk.qcow2
+mkdir -p "$dir"
+ovmf=/usr/share/edk2/x64/OVMF_CODE.4m.fd
+vars=$dir/OVMF_VARS.4m.fd
+[[ -f $vars ]] || cp /usr/share/edk2/x64/OVMF_VARS.4m.fd "$vars"
+boot() {
+    exec qemu-system-x86_64 -enable-kvm -machine q35 -cpu host -smp 4 -m 3G \
+        -drive if=pflash,format=raw,readonly=on,file="$ovmf" -drive if=pflash,format=raw,file="$vars" \
+        -drive file="$disk",if=virtio,format=qcow2 "$@" \
+        -device virtio-vga-gl -display gtk,gl=on \
+        -nic user,model=virtio-net-pci -device qemu-xhci -device usb-tablet \
+        -audiodev pipewire,id=a -device intel-hda -device hda-duplex,audiodev=a
+}
+case ${1:-} in
+    install)
+        iso=${2:?usage: vm install ISO}
+        [[ -f $disk ]] && { echo "$disk exists; remove it to start over" >&2; exit 1; }
+        qemu-img create -f qcow2 "$disk" 40G >/dev/null
+        boot -cdrom "$iso" -boot order=d ;;
+    run) boot ;;
+    snapshot) qemu-img snapshot -c "${2:?name}" "$disk" ;;
+    revert) qemu-img snapshot -a "${2:?name}" "$disk" ;;
+    *) sed -n '3,8p' "$0" | sed 's/^# //'; exit 2 ;;
+esac

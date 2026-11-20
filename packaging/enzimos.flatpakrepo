@@ -1,0 +1,7 @@
+[Flatpak Repo]
+Title=enzimOS Apps
+Comment=Apps from the enzimOS project
+Url=https://flatpak.enzimos.invalid/repo/
+CollectionID=org.enzimos.Apps
+DefaultBranch=stable
+GPGKey=mDMEauVfqhYJKwYBBAHaRw8BAQdAvQv6yPQj34DqmtrPs+ikQlmN2UnS1vD5of01hGtmtuy0NGVuemltT1MgRmxhdHBhayByZXBvc2l0b3J5IDxmbGF0cGFrQGVuemltb3MuaW52YWxpZD6IlgQTFgoAPhYhBAKvJUIKFgnqxMtOX6nkuMGMs/R2BQJq5V+qAhsDBQkFo5qABQsJCAcCBhUKCQgLAgQWAgMBAh4BAheAAAoJEKnkuMGMs/R2LO4BAPt/unsTyW07oNXimM4wyFS8F4HO5IpUadaHSin9rEtMAP97JHsh0JOGmF/zeiH+S0jZEIpZJ1WKd1k3nUSBsJVtAw==

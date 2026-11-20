@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Serve a built repository (tools/build-repo OUT) on host loopback for a test VM,
+# which reaches it as http://10.0.2.2:PORT/ through QEMU's user network.
+#   test/serve-repo OUT [PORT]
+set -euo pipefail
+out=${1:?usage: serve-repo OUT [PORT]}; port=${2:-18093}
+[[ -f $out/enzimos/x86_64/enzimos.db ]] || { echo "no repository in $out" >&2; exit 1; }
+echo "serving $out on 127.0.0.1:$port (guest: http://10.0.2.2:$port/)"
+exec python3 -m http.server "$port" --bind 127.0.0.1 --directory "$out"

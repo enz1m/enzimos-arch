@@ -1,0 +1,222 @@
+#!/usr/bin/env bash
+# Safeguards around an existing system: Flatpak copies of the native apps are
+# found in both installations, --purge-user-data lists only enzUI's own files,
+# and remove refuses while an enzUI session runs.
+set -euo pipefail
+here=$(cd "$(dirname "$0")/.." && pwd)
+work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+# shellcheck source=../enzimos-try
+source "$here/enzimos-try"
+# shellcheck disable=SC2034 # read by the sourced functions
+TARGET_USER=tester
+# Files and Text are system Flatpaks, Terminal is a user one.
+flatpak() {
+    [[ $1 == info ]] || return 1
+    [[ $2 == --system && ( $3 == io.github.enzui.Files || $3 == io.github.enzui.Text ) ]] && return 0
+    [[ $2 == --user && $3 == io.github.enzui.Terminal ]] && return 0
+    return 1
+}
+as_user() { "$@"; }
+command() { [[ $1 == -v ]] && return 0; builtin command "$@"; }
+pacman() { return 1; }
+found=$(duplicate_flatpaks)
+[[ $found == $'io.github.enzui.Files system\nio.github.enzui.Terminal user' ]] || { echo "FAIL: duplicates: $found"; exit 1; }
+found=$(WITH_APPS=1 duplicate_flatpaks)
+[[ $found == $'io.github.enzui.Files system\nio.github.enzui.Terminal user\nio.github.enzui.Text system' ]]
+home=$work/home; mkdir -p "$home/.config/autostart"
+printf '[Desktop Entry]\nExec=a\nOnlyShowIn=enzUI;\n' > "$home/.config/autostart/ours.desktop"
+printf '[Desktop Entry]\nExec=b\n' > "$home/.config/autostart/theirs.desktop"
+paths=$(user_data_paths "$home" | tr '\0' '\n')
+grep -qx "$home/.config/autostart/ours.desktop" <<< "$paths" || { echo "FAIL: enzUI-only autostart entry missing"; exit 1; }
+if grep -qx -e "$home/.config/autostart/theirs.desktop" -e "$home/.config" -e "$home" <<< "$paths"; then
+    echo "FAIL: purge would touch files that are not enzUI's"; exit 1
+fi
+grep -v -e '/enzui' -e '/enzimos' -e 'ours.desktop' <<< "$paths" && { echo "FAIL: unexpected purge path"; exit 1; }
+STATE=$work/state; printf "ownership-v3\npackage enzimos-desktop\n" > "$STATE"
+need_root() { :; }
+# Only the login screen's compositor (greetd's system user): not a session.
+ps() { echo "  963"; }
+enzui_running && { echo "FAIL: the login screen counted as an enzUI session"; exit 1; }
+ps() { echo "  963"; echo " 1000"; }
+if ( remove ) >/dev/null 2>&1; then echo "FAIL: remove ran during an enzUI session"; exit 1; fi
+# Removed earlier without --purge-user-data: a later purge deletes only enzUI's files.
+mkdir -p "$home/.config/enzui"
+ps() { :; }
+getent() { echo "tester:x:$(id -u):1000::$home:/bin/bash"; }
+: > "$STATE"; PURGE_USER_DATA=1 ASSUME_YES=1
+( remove ) >/dev/null || { echo "FAIL: purge after remove refused"; exit 1; }
+[[ ! -e $home/.config/enzui && ! -e $home/.config/autostart/ours.desktop ]] || { echo "FAIL: enzUI settings kept"; exit 1; }
+[[ -e $home/.config/autostart/theirs.desktop ]] || { echo "FAIL: purge deleted another program's entry"; exit 1; }
+mkdir -p "$work/other/enzui"
+mv "$home/.config" "$home/config-owned"
+ln -s "$work/other" "$home/.config"
+( remove ) >/dev/null
+[[ -d $work/other/enzui ]]
+PURGE_USER_DATA=0
+if ( remove ) >/dev/null 2>&1; then echo "FAIL: remove without state ran"; exit 1; fi
+# status names the server actually configured, not the built-in default.
+PACMAN_CONF=$work/pacman.conf REPO_CONF=$work/repo.conf
+printf '%s\n' "$MARK_BEGIN" > "$PACMAN_CONF"
+printf 'SigLevel = Required DatabaseOptional\nServer = http://mirror.test/enzimos\n' > "$REPO_CONF"
+pacman-key() { return 1; }
+grep -qx 'repository: configured (http://mirror.test/enzimos)' <<< "$(status)" || { echo "FAIL: status: $(status)"; exit 1; }
+echo "ok safeguards"
+
+# Additions belong to this transaction, not every package from its repository.
+# A pre-existing orphan must survive; a later user-installed app is never adopted.
+printf 'ownership-v3\n' > "$STATE"
+printf 'kde\nold-orphan\npreinstalled-enzui-app\n' > "${STATE}.before"
+printf 'desktop-dep\nenzimos-desktop\nkde\nold-orphan\npreinstalled-enzui-app\n' > "$work/packages"
+pacman() {
+    if [[ $1 == -Qq ]]; then cat "$work/packages"; return; fi
+    if [[ $1 == -Ql ]]; then return 0; fi
+    if [[ $1 == -Sl ]]; then printf 'enzimos enzimos-desktop 1 [installed]\n'; return; fi
+    if [[ $1 == -R ]]; then
+        shift
+        [[ ${1:-} == --unneeded ]] && shift
+        [[ ${1:-} == --noconfirm ]] && shift
+        printf '%s\n' "$@" > "$work/removed"
+        [[ ! -e $work/refuse-removal ]] || return 1
+        grep -vxF -f "$work/removed" "$work/packages" > "$work/remaining"
+        mv "$work/remaining" "$work/packages"
+        return
+    fi
+    echo "FAIL: unexpected pacman operation: $*" >&2; return 1
+}
+finish_package_transaction
+[[ ! -e ${STATE}.before ]]
+[[ $(awk '$1 == "added-package" {print $2}' "$STATE") == $'desktop-dep\nenzimos-desktop' ]]
+printf 'later-app\n' >> "$work/packages"
+remove_repo() { echo removed > "$work/repo-removed"; }
+restore_display_manager() { :; }
+flatpak() { return 1; }
+: > "$work/refuse-removal"
+if ( remove ) > "$work/refusal.log" 2>&1; then echo "FAIL: dependency refusal ignored"; exit 1; fi
+[[ -s $STATE && ! -e $work/repo-removed ]] || { echo "FAIL: removal lost retry state"; exit 1; }
+rm "$work/refuse-removal"
+( remove ) >/dev/null
+[[ $(cat "$work/removed") == $'desktop-dep\nenzimos-desktop' ]] || { echo "FAIL: pre-existing or later package removed"; exit 1; }
+[[ ! -e $STATE && -e $work/repo-removed ]]
+printf 'ownership-v3\nadded-package enzimos-desktop\n' > "$STATE"
+: > "${STATE}.before"
+if ( remove ) >/dev/null 2>&1; then echo "FAIL: ambiguous interrupted transaction adopted"; exit 1; fi
+rm "${STATE}.before"
+printf 'package enzimos-desktop\n' > "$STATE"
+if ( remove ) >/dev/null 2>&1; then echo "FAIL: legacy package ownership guessed"; exit 1; fi
+echo "ok package ownership and retry safeguards"
+
+# A journal from the old combined transaction could include stock upgrades.
+printf 'ownership-v2\nadded-package enzimos-desktop\nadded-package stock-upgrade-dep\n' > "$STATE"
+printf 'enzimos-desktop\nkde\nstock-upgrade-dep\n' > "$work/packages"
+( remove ) >/dev/null
+[[ $(cat "$work/removed") == enzimos-desktop ]]
+grep -qx stock-upgrade-dep "$work/packages"
+echo "ok stock additions kept under an older journal"
+
+# Even when pacman fails after adding a package (e.g. a failed hook), that
+# addition is removable. The preceding distro upgrade owns its own additions.
+: > "$STATE"
+printf 'enzimos-desktop\nkde\nold-orphan\n' > "$work/packages"
+preflight() { :; }
+add_repo() { :; }
+systemctl() { :; }
+pacman() {
+    case $1 in
+        -Qq) cat "$work/packages" ;;
+        -Qqd) echo enzimos-desktop ;;
+        -Q) return 1 ;;
+        -Syu)
+            [[ $* != *enzimos-desktop* ]] || return 1
+            echo stock-upgrade-dep >> "$work/packages"
+            ;;
+        -S) echo new-runtime >> "$work/packages"; return 1 ;;
+        -D) printf '%s\n' "$*" > "$work/reasons" ;;
+        *) echo "FAIL: unexpected pacman operation: $*" >&2; return 1 ;;
+    esac
+}
+WITH_APPS=0 WITH_AI=0 WITH_MODELS=0 WITH_GREETER=0 WITH_FLATPAK_APPS=0 REPLACE_FLATPAKS=0
+if ( install ) > "$work/install-failure.log" 2>&1; then echo "FAIL: failed pacman reported success"; exit 1; fi
+grep -qx 'added-package new-runtime' "$STATE"
+if grep -qx 'added-package stock-upgrade-dep' "$STATE"; then
+    echo "FAIL: the journal adopted a stock upgrade dependency"
+    exit 1
+fi
+[[ ! -e ${STATE}.before ]]
+grep -qx -- '-D --asdeps enzimos-desktop' "$work/reasons"
+echo "ok failed install journal and existing install reason"
+
+# Independently installed Flatpaks keep their shared runtime and dependencies;
+# a retained native component also keeps its update repository and retry state.
+printf 'ownership-v3\nadded-package flatpak\nadded-package flatpak-runtime\nadded-package enzimos-desktop\nadded-package desktop-dep\n' > "$STATE"
+printf 'desktop-dep\nenzimos-desktop\nflatpak\nflatpak-runtime\nkde\nold-orphan\n' > "$work/packages"
+pacman() {
+    case $1 in
+        -Qq) cat "$work/packages" ;;
+        -Q) grep -qx "$2" "$work/packages" ;;
+        -D) printf '%s\n' "$*" > "$work/reasons" ;;
+        -Sl) printf 'enzimos enzimos-desktop 1 [installed]\n' ;;
+        -Ql) return 0 ;;
+        -R)
+            [[ $2 == --unneeded ]] || return 1
+            shift 2
+            [[ ${1:-} == --noconfirm ]] && shift
+            printf '%s\n' "$@" > "$work/removed"
+            # ALPM retains this dependency while the runtime remains installed.
+            grep -vx -e flatpak-runtime "$work/removed" > "$work/removable"
+            if [[ -e $work/hold-native ]]; then
+                grep -vx -e enzimos-desktop -e desktop-dep "$work/removable" > "$work/filtered"
+                mv "$work/filtered" "$work/removable"
+            fi
+            grep -vxF -f "$work/removable" "$work/packages" > "$work/remaining"
+            mv "$work/remaining" "$work/packages"
+            ;;
+        *) return 1 ;;
+    esac
+}
+( remove ) > "$work/shared-runtime.log"
+[[ $(cat "$work/packages") == $'flatpak\nflatpak-runtime\nkde\nold-orphan' ]]
+grep -qx -- '-D --asexplicit flatpak' "$work/reasons"
+[[ ! -e $STATE ]]
+printf 'ownership-v3\nadded-package enzimos-desktop\nadded-package desktop-dep\n' > "$STATE"
+printf 'desktop-dep\nenzimos-desktop\nkde\nold-orphan\n' > "$work/packages"
+rm -f "$work/repo-removed"
+: > "$work/hold-native"
+if ( remove ) > "$work/native-retained.log"; then echo "FAIL: required native packages lost their update repository"; exit 1; fi
+[[ -s $STATE && ! -e $work/repo-removed ]]
+echo "ok shared runtime and retained native updates"
+
+
+# A failed repository download must not leave a new broken sync repository.
+: > "$STATE"
+rm -f "$work/repo-removed"
+pacman() {
+    case $1 in
+        -Qq) printf 'kde\nold-orphan\n' ;;
+        -Qqd|-Q|-Syu) return 1 ;;
+        *) return 1 ;;
+    esac
+}
+if ( install ) > "$work/no-additions-failure.log" 2>&1; then echo "FAIL: failed sync reported success"; exit 1; fi
+[[ ! -e $STATE && -e $work/repo-removed && ! -e ${STATE}.before ]]
+echo "ok unsuccessful fresh install cleanup"
+
+# Reload only active user managers and retire removed package units. A user's
+# same-name override remains theirs even after the system package goes away.
+USER_RUNTIMES=$work/runtime
+mkdir -p "$USER_RUNTIMES/1000"
+python3 - "$USER_RUNTIMES/1000/bus" <<'PY'
+import socket,sys
+s=socket.socket(socket.AF_UNIX);s.bind(sys.argv[1]);s.close()
+PY
+runuser() {
+    while [[ $1 != systemctl ]]; do shift; done
+    shift 2
+    if [[ $1 == show ]]; then
+        [[ ${*: -1} == custom.service ]] && printf '%s\n' "$home/.config/systemd/user/custom.service"
+        return 0
+    fi
+    printf '%s\n' "$*" >> "$work/user-unit-actions"
+}
+refresh_removed_user_units removed.timer removed-portal.service custom.service
+[[ $(cat "$work/user-unit-actions") == $'daemon-reload\nstop removed.timer\nreset-failed removed.timer\nstop removed-portal.service\nreset-failed removed-portal.service' ]]
+echo "ok removed user-unit cleanup preserves overrides"

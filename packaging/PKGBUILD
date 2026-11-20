@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: MIT
+# Meta-packages that install the enzimOS desktop on an existing Arch-based
+# system. The component packages come from the enzimOS build (see
+# tools/build-repo); these only select them.
+pkgbase=enzimos-meta
+pkgname=(enzimos-desktop enzimos-apps enzimos-ai enzimos-flatpak-remote)
+pkgver=0.1.0
+pkgrel=2
+arch=('any')
+url='https://github.com/enz1m'
+license=('MIT')
+source=('enzimos.flatpakrepo')
+sha256sums=('6810e7f8d6a0a0f0e5de1acd59c7228686b3de3ea693d664fe892ff100c9278c')
+
+package_enzimos-desktop() {
+    pkgdesc='enzimOS desktop (enzUI session, Settings, Files, Terminal, Store) as an extra session'
+    depends=('enzui-desktop' 'enzimos-files' 'enzimos-terminal' 'enzimos-store'
+             'enzimos-app-permissions' 'enzimos-background-apps' 'enzui-mcp-center'
+             'enzimos-phone-link' 'flatpak' 'xdg-desktop-portal' 'polkit')
+    optdepends=('enzimos-flatpak-remote: optional enzimOS Flatpak app repository'
+                'enzimos-apps: Text and Task Manager'
+                'enzimos-ai: on-device assistant and voice typing'
+                'networkmanager: network settings'
+                'bluez: Bluetooth settings'
+                'power-profiles-daemon: power modes'
+                'cups: printers')
+}
+
+package_enzimos-apps() {
+    pkgdesc='More enzimOS apps: Text and Task Manager'
+    depends=('enzimos-desktop' 'enzimos-text' 'enzimos-task-manager')
+}
+
+package_enzimos-ai() {
+    pkgdesc='enzimOS on-device AI: assistant, local models service, voice typing'
+    depends=('enzimos-desktop' 'enzimos-inference-service' 'enzimos-ai-gateway'
+             'enzimos-agent-harness' 'enzimos-dictation' 'enzimos-llama-cpu'
+             'enzimos-whisper-cpu' 'enzimos-sherpa-onnx-cpu')
+    optdepends=('enzimos-ai-models: MiniCPM5 1B and Whisper base, about 700 MB'
+                'enzimos-llama-vulkan: run models on the GPU')
+}
+
+package_enzimos-flatpak-remote() {
+    pkgdesc='The signed enzimOS Flatpak repository, offered to Flatpak and the Store'
+    depends=('flatpak')
+    # Flatpak adds remotes from this folder for system installations.
+    install -Dm644 "$srcdir/enzimos.flatpakrepo" "$pkgdir/etc/flatpak/remotes.d/enzimos.flatpakrepo"
+}

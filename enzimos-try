@@ -1,0 +1,623 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Try the enzimOS desktop on an existing Arch-based system, and remove it again.
+#
+#   enzimos-try install [--apps] [--ai] [--models] [--flatpak-apps] [--greeter]
+#                       [--replace-flatpaks] [--yes]
+#   enzimos-try remove [--purge-user-data] [--yes]
+#   enzimos-try status
+#
+# install adds the signed enzimOS package repository, upgrades the system
+# (Arch does not support partial upgrades) and installs the enzUI desktop as
+# an extra session; the login manager then offers "enzUI". remove takes back
+# exactly what install added. Your files and settings in your home folder are
+# left alone unless you ask (--purge-user-data). --greeter also switches the login screen to the
+# enzimOS one (greetd) from the next boot; remove switches it back.
+#
+# Apps enzimOS ships natively (Files, Text, Task Manager, Terminal, Store) may
+# already be installed as Flatpaks: both are kept and enzUI's launcher marks
+# the Flatpak one, unless --replace-flatpaks uninstalls the Flatpak copies
+# (their data in ~/.var/app stays). --purge-user-data on remove also deletes
+# enzUI's own settings for the user running sudo, nothing else.
+set -euo pipefail
+
+REPO_NAME=enzimos
+REPO_URL=${ENZIMOS_REPO_URL:-https://packages.enzimos.invalid/arch/$REPO_NAME/x86_64}
+KEY_URL=${ENZIMOS_KEY_URL:-https://packages.enzimos.invalid/arch/enzimos-packages.asc}
+KEY_FINGERPRINT=316DD17C64DB52ABEFA9B558AA8B1E969F33214C
+PACMAN_CONF=${ENZIMOS_PACMAN_CONF:-/etc/pacman.conf}
+REPO_CONF=${ENZIMOS_REPO_CONF:-/etc/pacman.d/enzimos-repo.conf}
+STATE=/var/lib/enzimos-try/state
+DM_LINK=/etc/systemd/system/display-manager.service
+USER_RUNTIMES=/run/user
+MARK_BEGIN='# >>> enzimos-try: enzimOS packages'
+MARK_END='# <<< enzimos-try'
+NATIVE_APPS=(io.github.enzui.Files io.github.enzui.Terminal io.github.enzui.Store)
+# Offered from the enzimOS Flatpak repository.
+FLATPAK_APPS=(org.enzimos.Calculator io.enz.Messages io.github.enzui.Music org.enzimos.Photos
+              io.github.enzui.Remote io.github.enzui.Reader io.github.enzui.Calendar)
+# The person who ran sudo: their own Flatpak installation and settings.
+TARGET_USER=${SUDO_USER:-}
+
+die() { echo "enzimos-try: $*" >&2; exit 1; }
+say() { echo "==> $*"; }
+
+usage() { sed -n '3,21p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+confirm() {
+    [[ $ASSUME_YES == 1 ]] && return 0
+    local reply
+    read -r -p "$1 [y/N] " reply
+    [[ $reply == [yY]* ]]
+}
+
+need_root() { [[ $EUID == 0 ]] || die "run as root (sudo enzimos-try $COMMAND ...)"; }
+
+as_user() { runuser -u "$TARGET_USER" -- "$@"; }
+
+pacman() { command pacman --config "$PACMAN_CONF" "$@"; }
+pacman-key() { command pacman-key --config "$PACMAN_CONF" "$@"; }
+
+# The scopes ("system", "user") a Flatpak app is installed in, one per line.
+flatpak_scopes() {
+    command -v flatpak >/dev/null || return 0
+    flatpak info --system "$1" >/dev/null 2>&1 && echo system
+    if [[ -n $TARGET_USER ]] && as_user flatpak info --user "$1" >/dev/null 2>&1; then
+        echo user
+    fi
+    return 0
+}
+
+# Journal additions per transaction, including a failed transaction's completed work.
+# A leftover snapshot after SIGKILL is ambiguous: removal must not claim later installs.
+finish_package_transaction() {
+    [[ -f ${STATE}.before ]] || return 0
+    local current added next
+    current=$(mktemp); added=$(mktemp); next=$(mktemp "${STATE}.XXXXXX")
+    pacman -Qq | LC_ALL=C sort -u > "$current"
+    LC_ALL=C comm -13 "${STATE}.before" "$current" > "$added"
+    { cat "$STATE"; sed 's/^/added-package /' "$added"; } | awk '!seen[$0]++' > "$next"
+    mv "$next" "$STATE"
+    rm -f "$current" "$added" "${STATE}.before"
+}
+
+flatpak_uninstall() {
+    local scope=$1 id=$2
+    if [[ $scope == system ]]; then
+        flatpak uninstall --system --noninteractive "$id"
+    else
+        as_user flatpak uninstall --user --noninteractive "$id"
+    fi
+}
+
+# A person's enzUI session; the login screen's compositor runs as greetd's
+# system user and does not count.
+enzui_running() {
+    local uid
+    for uid in $(ps -C enz-hyprland,enzui-shell -o uid= 2>/dev/null); do
+        (( uid >= 1000 )) && return 0
+    done
+    return 1
+}
+
+purge_home() {
+    local entry account uid account_home
+    [[ -n $TARGET_USER ]] || die "run --purge-user-data via sudo from the account to clean"
+    entry=$(getent passwd "$TARGET_USER") || die "cannot find the account to clean"
+    IFS=: read -r account _ uid _ _ account_home _ <<< "$entry"
+    [[ $account == "$TARGET_USER" && $uid =~ ^[0-9]+$ && $uid -ge 1000 && $account_home == /* ]] \
+        || die "an ordinary local account is required"
+    account_home=$(realpath -e -- "$account_home") || die "cannot resolve the account's home"
+    [[ $account_home != / && -d $account_home && $(stat -c %u -- "$account_home") == "$uid" ]] \
+        || die "the account must own its home directory"
+    printf '%s\n' "$account_home"
+}
+
+# Emit only enzUI's own data paths whose parent stays within the account's home.
+user_data_paths() {
+    local home=$1 relative parent autostart
+    for relative in .config/enzui-shell .config/enzui .config/enzimos \
+        .config/enzui-mimeapps.list .local/share/enzui .local/state/enzui .cache/enzui; do
+        parent=$(realpath -m -- "$home/${relative%/*}") || continue
+        [[ $parent == "$home/"* ]] || continue
+        printf '%s\0' "$parent/${relative##*/}"
+    done
+    autostart=$(realpath -m -- "$home/.config/autostart") || return 0
+    if [[ $autostart == "$home/"* ]]; then
+        grep -lZx 'OnlyShowIn=enzUI;' "$autostart"/*.desktop 2>/dev/null || true
+    fi
+}
+
+show_user_data_paths() {
+    local path
+    while IFS= read -r -d '' path; do
+        printf '    %q\n' "$path"
+    done < <(user_data_paths "$1")
+}
+
+# Arch and the distributions built on it; enzimOS itself already has everything.
+preflight() {
+    [[ -r /etc/os-release ]] || die "cannot read /etc/os-release"
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    [[ ${ID:-} == enzimos ]] && die "this is enzimOS already"
+    [[ ${ID:-} == arch || " ${ID_LIKE:-} " == *" arch "* ]] \
+        || die "needs an Arch-based system (found ${PRETTY_NAME:-unknown})"
+    command -v pacman >/dev/null || die "pacman is missing"
+    if [[ $REPO_URL == https://packages.enzimos.invalid/* ]] &&
+        ! pacman-conf --config "$PACMAN_CONF" --repo-list | grep -qxF "$REPO_NAME"; then
+        die "no hosted package repository is configured; set ENZIMOS_REPO_URL and ENZIMOS_KEY_FILE to a signed build"
+    fi
+    [[ $(uname -m) == x86_64 ]] || die "only x86_64 is built"
+    # The session runs on systemd user services (Artix and other init systems lack them).
+    [[ -d /run/systemd/system ]] || die "needs systemd as the init system"
+    if [[ -e /sys/module/nvidia_drm/parameters/modeset && $(cat /sys/module/nvidia_drm/parameters/modeset) != Y ]]; then
+        echo "warning: NVIDIA without kernel modesetting; set nvidia_drm.modeset=1 or the enzUI session will not start" >&2
+    fi
+    local db_path
+    db_path=$(pacman-conf --config "$PACMAN_CONF" DBPath) || die "cannot read pacman's database path"
+    if pgrep -x pacman >/dev/null || [[ -e ${db_path%/}/db.lck ]]; then
+        die "another package operation is running (or ${db_path%/}/db.lck is stale)"
+    fi
+    local free
+    free=$(df -Pm / | awk 'END {print $4}')
+    (( free >= 3072 )) || die "needs at least 3 GiB free on / (found ${free} MiB)"
+    say "System: ${PRETTY_NAME:-$ID}"
+}
+
+repo_configured() { grep -qxF "$MARK_BEGIN" "$PACMAN_CONF"; }
+
+add_repo() {
+    local repositories create_repo=0 config
+    repositories=$(pacman-conf --config "$PACMAN_CONF" --repo-list) || die "cannot read pacman repositories"
+    if ! repo_configured; then
+        if grep -qxF "$REPO_NAME" <<< "$repositories"; then
+            say "Using the existing [$REPO_NAME] repository and its keyring."
+            return 0
+        fi
+        [[ ! -e $REPO_CONF && ! -L $REPO_CONF ]] || die "refusing to overwrite existing $REPO_CONF"
+        case $REPO_URL in
+            https://*|http://*|file://*) ;;
+            *) die "repository URL must use HTTPS, HTTP or a file URL" ;;
+        esac
+        [[ $REPO_URL != *[[:space:]]* && $REPO_URL != *'#'* ]] || die "repository URL must be a single URL"
+        [[ $REPO_CONF == /* && $REPO_CONF =~ ^[-_/a-zA-Z0-9.]+$ ]] || die "repository include must be a literal absolute path"
+        config=$(realpath -e -- "$PACMAN_CONF") || die "cannot resolve $PACMAN_CONF"
+        create_repo=1
+    fi
+    if ! pacman-key --list-keys "$KEY_FINGERPRINT" >/dev/null 2>&1; then
+        say "Adding the enzimOS package signing key $KEY_FINGERPRINT"
+        local scratch key found
+        scratch=$(mktemp -d) || die "could not create a signing key staging directory"
+        key=$scratch/key.asc
+        if [[ -n ${ENZIMOS_KEY_FILE:-} ]]; then
+            cp -- "$ENZIMOS_KEY_FILE" "$key" || { rm -rf -- "$scratch"; die "could not read the signing key"; }
+        else
+            curl -fsSL --proto '=https' "$KEY_URL" -o "$key" || { rm -rf -- "$scratch"; die "could not download the signing key"; }
+        fi
+        if ! found=$(gpg --no-options --homedir "$scratch" --batch --with-colons --show-keys -- "$key" 2>/dev/null \
+                | awk -F: '$1 == "sec" || $1 == "ssb" {exit 1} $1 == "pub" {primary=1} $1 == "fpr" && primary {print $10; primary=0}'); then
+            rm -rf -- "$scratch"
+            die "could not read the signing key fingerprint"
+        fi
+        if [[ $found != "$KEY_FINGERPRINT" ]]; then
+            rm -rf -- "$scratch"
+            die "the key file must contain only the expected signing key"
+        fi
+        if ! pacman-key --add "$key" >/dev/null || ! pacman-key --lsign-key "$KEY_FINGERPRINT" >/dev/null; then
+            rm -rf -- "$scratch"
+            pacman-key --delete "$KEY_FINGERPRINT" >/dev/null 2>&1 || true
+            die "could not enroll the enzimOS signing key"
+        fi
+        rm -rf -- "$scratch"
+        if ! grep -qx key "$STATE" && ! echo key >> "$STATE"; then
+            pacman-key --delete "$KEY_FINGERPRINT" >/dev/null 2>&1 || true
+            die "could not record signing key enrollment in the journal"
+        fi
+    fi
+    if (( create_repo )); then
+        say "Adding the [$REPO_NAME] repository"
+        # pacman.conf holds the section header; the included file its settings.
+        (set -o noclobber; printf 'SigLevel = Required\nServer = %s\n' "$REPO_URL" > "$REPO_CONF") || die "could not create $REPO_CONF"
+        local temporary
+        if ! temporary=$(mktemp "${config}.enzimos.XXXXXX"); then
+            rm -f -- "$REPO_CONF"
+            die "could not stage the pacman configuration"
+        fi
+        if ! {
+            cat "$config" &&
+            printf '\n%s\n[%s]\nInclude = %s\n%s\n' "$MARK_BEGIN" "$REPO_NAME" "$REPO_CONF" "$MARK_END"
+        } > "$temporary" ||
+            ! cp --attributes-only --preserve=all -- "$config" "$temporary" ||
+            ! echo repo >> "$STATE"; then
+            rm -f -- "$temporary" "$REPO_CONF"
+            die "could not stage the enzimOS repository block for $config"
+        fi
+        if ! mv -T -- "$temporary" "$config"; then
+            rm -f -- "$temporary"
+            die "could not add the enzimOS repository block to $config"
+        fi
+    fi
+}
+
+# The login manager in use: the unit display-manager.service points to.
+current_display_manager() {
+    local target
+    target=$(readlink "$DM_LINK" 2>/dev/null) || { echo none; return; }
+    basename "$target"
+}
+
+switch_to_greeter() {
+    local previous
+    previous=$(current_display_manager)
+    if [[ $previous == greetd.service ]]; then
+        say "greetd is already the login manager; it shows the enzimOS login screen while enzimos-greeter is installed."
+        return
+    fi
+    echo "display-manager $previous" >> "$STATE"
+    [[ $previous == none ]] || systemctl disable "$previous" >/dev/null
+    systemctl enable greetd.service >/dev/null
+    say "The enzimOS login screen starts from the next boot (was: $previous)."
+}
+
+restore_display_manager() {
+    local previous
+    previous=$(awk '$1 == "display-manager" {print $2}' "$STATE" | tail -1)
+    [[ -n $previous ]] || return 0
+    systemctl disable greetd.service >/dev/null 2>&1 || true
+    [[ $previous == none ]] || systemctl enable "$previous" >/dev/null
+    say "Login screen restored to $previous from the next boot."
+}
+
+remove_repo() {
+    if grep -qx repo "$STATE" && repo_configured; then
+        local config contents before after block expected temporary
+        local begin=$'\n'"$MARK_BEGIN"$'\n' end=$'\n'"$MARK_END"$'\n'
+        config=$(realpath -e -- "$PACMAN_CONF") || die "cannot resolve $PACMAN_CONF"
+        IFS= read -r -d '' contents < "$config" || true
+        [[ $contents == *"$begin"*"$end"* ]] || die "the enzimOS repository block was changed; review $config"
+        before=${contents%%"$begin"*}
+        block=${contents#*"$begin"}
+        after=${block#*"$end"}
+        block=${block%%"$end"*}
+        printf -v expected '[%s]\nInclude = %s' "$REPO_NAME" "$REPO_CONF"
+        [[ $block == "$expected" ]] || die "the enzimOS repository block was changed; review $config"
+        if [[ -n $before && -n $after && $before != *$'\n' && $after != $'\n'* ]]; then
+            before+=$'\n'
+        fi
+        temporary=$(mktemp "${config}.enzimos.XXXXXX")
+        if ! printf '%s%s' "$before" "$after" > "$temporary" ||
+            ! cp --attributes-only --preserve=all -- "$config" "$temporary" ||
+            ! mv -T -- "$temporary" "$config"; then
+            rm -f -- "$temporary"
+            die "could not remove the enzimOS repository block from $config"
+        fi
+    fi
+    if grep -qx repo "$STATE"; then
+        local repositories
+        repositories=$(pacman-conf --config "$PACMAN_CONF" --repo-list) || die "cannot read pacman repositories"
+        if grep -qxF "$REPO_NAME" <<< "$repositories"; then
+            die "the enzimOS repository is still configured; review $PACMAN_CONF"
+        fi
+        rm -f -- "$REPO_CONF" || die "could not remove $REPO_CONF"
+    fi
+    if grep -qx key "$STATE" 2>/dev/null && pacman-key --list-keys "$KEY_FINGERPRINT" >/dev/null 2>&1; then
+        pacman-key --delete "$KEY_FINGERPRINT" >/dev/null || die "could not remove the signing key"
+    fi
+}
+
+# Natively shipped apps that are also Flatpaks: "ID SCOPE" per line.
+duplicate_flatpaks() {
+    local id scope
+    local native_apps=("${NATIVE_APPS[@]}")
+    if [[ ${WITH_APPS:-0} == 1 ]] || pacman -Q enzimos-text >/dev/null 2>&1; then
+        native_apps+=(io.github.enzui.Text)
+    fi
+    if [[ ${WITH_APPS:-0} == 1 ]] || pacman -Q enzimos-task-manager >/dev/null 2>&1; then
+        native_apps+=(io.github.enzui.TaskManager)
+    fi
+    for id in "${native_apps[@]}"; do
+        while read -r scope; do
+            [[ -n $scope ]] && echo "$id $scope"
+        done < <(flatpak_scopes "$id")
+    done
+}
+
+install() {
+    need_root; preflight
+    local packages=(enzimos-desktop)
+    [[ $WITH_APPS == 1 ]] && packages+=(enzimos-apps)
+    [[ $WITH_AI == 1 ]] && packages+=(enzimos-ai)
+    [[ $WITH_MODELS == 1 ]] && packages+=(enzimos-ai-models)
+    [[ $WITH_GREETER == 1 ]] && packages+=(enzimos-greeter)
+    [[ $WITH_FLATPAK_APPS == 1 ]] && packages+=(enzimos-flatpak-remote)
+    echo "This will:"
+    echo "  - add the signed enzimOS package repository and its key"
+    echo "  - upgrade the whole system first (pacman -Syu; Arch does not support partial upgrades)"
+    echo "  - install: ${packages[*]}"
+    [[ $WITH_FLATPAK_APPS == 1 ]] && echo "  - add the enzimOS Flatpak repository and install its apps"
+    [[ $WITH_GREETER == 1 ]] && echo "  - use the enzimOS login screen from the next boot (currently: $(current_display_manager))"
+    [[ $WITH_GREETER == 1 && $(current_display_manager) == greetd.service ]] \
+        && echo "  - note: greetd is your login manager; it will show the enzimOS login screen instead of its current greeter"
+    local duplicates
+    mapfile -t duplicates < <(duplicate_flatpaks)
+    if (( ${#duplicates[@]} )); then
+        echo "These apps are also installed as Flatpaks:"
+        printf '    %s\n' "${duplicates[@]}"
+        if [[ $REPLACE_FLATPAKS == 1 ]]; then
+            echo "  - their Flatpak copies will be uninstalled (--replace-flatpaks); their data in ~/.var/app stays"
+        else
+            echo "  - both copies stay; enzUI's launcher marks the Flatpak one (--replace-flatpaks removes it)"
+        fi
+    fi
+    echo "Your current credential provider is kept."
+    if [[ $WITH_GREETER == 0 ]]; then
+        echo "Your current login manager is kept."
+    fi
+    echo "Your current desktop stays available; choose \"enzUI\" at the login screen to try enzimOS."
+    confirm "Continue?" || exit 1
+    local fresh_install=0
+    mkdir -p "$(dirname "$STATE")"
+    [[ ! -e ${STATE}.before ]] || die "an interrupted package transaction needs manual review (${STATE}.before); no packages will be claimed automatically"
+    if [[ -s $STATE ]]; then
+        grep -qx -e ownership-v2 -e ownership-v3 "$STATE" || die "legacy install has no package ownership journal; review its packages before changing it"
+    else
+        fresh_install=1
+        echo ownership-v3 > "$STATE"
+    fi
+    if ! (add_repo); then
+        if (( fresh_install )); then
+            remove_repo
+            rm -f "$STATE"
+        fi
+        return 1
+    fi
+    local kernel_before existing_dependencies=() targets=() package transaction_result=0
+    kernel_before=$(pacman -Q linux 2>/dev/null || true)
+    say "Upgrading the system"
+    pacman -Syu "${NOCONFIRM[@]}" || transaction_result=$?
+    if (( transaction_result != 0 )); then
+        if [[ $fresh_install == 1 ]]; then
+            remove_repo
+            rm -f "$STATE"
+        fi
+        return "$transaction_result"
+    fi
+    for package in "${packages[@]}"; do
+        if pacman -Qqd | grep -qx "$package"; then existing_dependencies+=("$package"); fi
+        targets+=("$REPO_NAME/$package")
+    done
+    # Packages brought in by the normal Arch upgrade belong to the original system.
+    say "Installing ${packages[*]}"
+    pacman -Qq | LC_ALL=C sort -u > "${STATE}.before"
+    trap finish_package_transaction EXIT
+    pacman -S --needed "${NOCONFIRM[@]}" "${targets[@]}" || transaction_result=$?
+    finish_package_transaction
+    trap - EXIT
+    # Explicit targets must not take ownership of an already installed dependency.
+    if (( ${#existing_dependencies[@]} )); then
+        pacman -D --asdeps "${existing_dependencies[@]}"
+    fi
+    if (( transaction_result != 0 )); then
+        if [[ $fresh_install == 1 ]] && ! grep -q '^added-package ' "$STATE"; then
+            say "Installation failed without adding packages; removing this attempt's repository and key."
+            remove_repo
+            rm -f "$STATE"
+        fi
+        return "$transaction_result"
+    fi
+    printf 'package %s\n' "${packages[@]}" >> "$STATE"
+    # Background apps check user services against a record of the boot's
+    # mount namespace that is taken before the first login; take it now, so
+    # they work without a restart. It runs as root in PID 1's namespace.
+    systemctl start enzimos-background-trust.service || true
+    local flatpak_failed=0 id scope
+    if [[ $REPLACE_FLATPAKS == 1 ]]; then
+        local row
+        for row in "${duplicates[@]}"; do
+            read -r id scope <<< "$row"
+            if flatpak_uninstall "$scope" "$id"; then
+                echo "replaced-flatpak $scope $id" >> "$STATE"
+            else
+                flatpak_failed=1
+            fi
+        done
+    fi
+    if [[ $WITH_FLATPAK_APPS == 1 ]]; then
+        say "Installing the enzimOS Flatpak apps"
+        for id in "${FLATPAK_APPS[@]}"; do
+            if [[ -n $(flatpak_scopes "$id") ]]; then
+                echo "    $id is already installed; left as it is"
+                continue
+            fi
+            if flatpak install --system --noninteractive enzimos "$id"; then
+                echo "flatpak-app $id" >> "$STATE"
+            else
+                flatpak_failed=1
+            fi
+        done
+    fi
+    [[ $WITH_GREETER == 1 ]] && switch_to_greeter
+    if [[ $(pacman -Q linux 2>/dev/null || true) != "$kernel_before" ]]; then
+        say "The kernel was upgraded: restart before logging in to enzUI."
+    fi
+    (( flatpak_failed == 0 )) || die "the desktop packages are installed, but some Flatpak operations failed; rerun the installer to retry"
+    say "Done. Log out and choose \"enzUI\" at the login screen."
+}
+
+purge_user_data() {
+    local path
+    while IFS= read -r -d '' path; do
+        as_user /usr/bin/rm -rf -- "$path" || die "cannot remove $path"
+    done < <(user_data_paths "$1")
+}
+
+# Package hooks reload PID 1, but a logged-in user's manager can retain a
+# removed timer or portal backend. Touch only removed package units, and
+# preserve same-name units supplied by the user or a generator.
+refresh_removed_user_units() {
+    (( $# )) || return 0
+    local bus runtime uid account unit fragment
+    for bus in "$USER_RUNTIMES"/[0-9]*/bus; do
+        [[ -S $bus ]] || continue
+        runtime=${bus%/bus}; uid=${runtime##*/}
+        account=$(getent passwd "$uid" | cut -d: -f1)
+        [[ -n $account ]] || continue
+        local manager=(runuser -u "$account" -- env "XDG_RUNTIME_DIR=$runtime"
+            "DBUS_SESSION_BUS_ADDRESS=unix:path=$bus" systemctl --user)
+        "${manager[@]}" daemon-reload >/dev/null 2>&1 || continue
+        for unit in "$@"; do
+            fragment=$("${manager[@]}" show --property=FragmentPath --value "$unit" 2>/dev/null) || continue
+            [[ -z $fragment || $fragment == /usr/lib/systemd/user/"$unit" ]] || continue
+            "${manager[@]}" stop "$unit" >/dev/null 2>&1 || true
+            "${manager[@]}" reset-failed "$unit" >/dev/null 2>&1 || true
+        done
+    done
+}
+
+remove() {
+    need_root
+    local home_to_clean=
+    if [[ $PURGE_USER_DATA == 1 ]]; then
+        home_to_clean=$(purge_home) || return 1
+    fi
+    if [[ ! -s $STATE ]]; then
+        # Removed earlier without --purge-user-data: only the settings are left.
+        [[ -n $home_to_clean ]] \
+            || die "nothing to remove: enzimos-try has not installed anything here"
+        echo "enzimOS is already removed. This deletes enzUI's own settings for $TARGET_USER:"
+        show_user_data_paths "$home_to_clean"
+        confirm "Delete them?" || exit 1
+        purge_user_data "$home_to_clean"
+        say "enzUI settings deleted."
+        return
+    fi
+    grep -qx -e ownership-v2 -e ownership-v3 "$STATE" || die "legacy install has no package ownership journal; refusing automatic removal"
+    [[ ! -e ${STATE}.before ]] || die "an interrupted package transaction needs manual review (${STATE}.before); refusing automatic removal"
+    enzui_running && die "an enzUI session is running; log out of it (and switch to another desktop) first"
+    echo "This removes the enzimOS packages, their repository and key."
+    if [[ -n $home_to_clean ]]; then
+        echo "It also deletes enzUI's own settings for $TARGET_USER:"
+        show_user_data_paths "$home_to_clean"
+    else
+        echo "Settings in your home folder (~/.config/enzui*, ~/.config/enzimos) are kept;"
+        echo "\`enzimos-try remove --purge-user-data\` deletes them later."
+    fi
+    confirm "Remove enzimOS?" || exit 1
+    if grep -q '^flatpak-app ' "$STATE"; then
+        command -v flatpak >/dev/null || die "Flatpak is required to remove the apps installed with --flatpak-apps"
+        local apps id
+        apps=$(flatpak list --system --app --columns=application,origin) || die "could not list system Flatpak apps; the removal journal is kept"
+        while read -r id; do
+            if awk -v app="$id" '$1 == app && $2 == "enzimos" { found=1 } END { exit !found }' <<< "$apps"; then
+                flatpak_uninstall system "$id" || die "could not remove $id; the removal journal is kept"
+            fi
+        done < <(awk '$1 == "flatpak-app" {print $2}' "$STATE" | sort -u)
+    fi
+    if grep -q '^replaced-flatpak ' "$STATE"; then
+        echo "Flatpak copies replaced at install (reinstall them from their own repository if you want them back):"
+        awk '$1 == "replaced-flatpak" {print "    " $3 " (" $2 ")"}' "$STATE"
+    fi
+    # No recursive orphan removal: an unused dependency may predate this install.
+    # Normal dependency checks protect packages added by the user afterwards.
+    local installed=() native_packages remaining retained_native current_packages entry package unit
+    local candidate_units=() removed_units=()
+    native_packages=
+    # Store may have installed independent apps. Keep their shared runtime,
+    # and let ALPM retain its dependencies rather than leaving those apps stranded.
+    if grep -qx ownership-v3 "$STATE" && grep -qx 'added-package flatpak' "$STATE" && pacman -Q flatpak >/dev/null 2>&1; then
+        pacman -D --asexplicit flatpak
+        say "Keeping Flatpak for independently installed apps."
+    fi
+    mapfile -t installed < <(LC_ALL=C comm -12 \
+        <(awk '$1 == "added-package" && $2 != "flatpak" {print $2}' "$STATE" | LC_ALL=C sort -u) \
+        <(pacman -Qq | LC_ALL=C sort -u))
+    if (( ${#installed[@]} )); then
+        native_packages=$(pacman -Sl "$REPO_NAME" | awk '{print $2}') \
+            || die "cannot read the enzimOS repository package list; keeping the removal journal"
+        # The older combined transaction could claim ordinary Arch packages.
+        if grep -qx ownership-v2 "$STATE"; then
+            mapfile -t installed < <(grep -xF -f <(printf '%s\n' "$native_packages") \
+                <(printf '%s\n' "${installed[@]}"))
+        fi
+    fi
+    if (( ${#installed[@]} )); then
+        mapfile -t candidate_units < <(pacman -Ql "${installed[@]}" | awk \
+            '$2 ~ "^/usr/lib/systemd/user/[^/@]+\\.(service|timer|socket|target)$" {sub("^/usr/lib/systemd/user/", "", $2); print $1 " " $2}')
+        pacman -R --unneeded "${NOCONFIRM[@]}" "${installed[@]}" || return $?
+    fi
+    current_packages=$(pacman -Qq) || die "cannot read remaining packages; keeping the removal journal"
+    for entry in "${candidate_units[@]}"; do
+        read -r package unit <<< "$entry"
+        if ! grep -qx "$package" <<< "$current_packages"; then removed_units+=("$unit"); fi
+    done
+    refresh_removed_user_units "${removed_units[@]}"
+    restore_display_manager
+    remaining=$(LC_ALL=C comm -12 \
+        <(awk '$1 == "added-package" {print $2}' "$STATE" | LC_ALL=C sort -u) \
+        <(LC_ALL=C sort -u <<< "$current_packages"))
+    retained_native=$(LC_ALL=C comm -12 <(LC_ALL=C sort -u <<< "$remaining") \
+        <(LC_ALL=C sort -u <<< "$native_packages"))
+    if [[ -n $retained_native ]]; then
+        say "Some enzimOS packages are still required by other packages:"
+        printf '    %s\n' "$retained_native"
+        say "Their repository and removal journal are kept; remove their dependants before retrying."
+        return 1
+    fi
+    remove_repo
+    if [[ -n $home_to_clean ]]; then purge_user_data "$home_to_clean"; fi
+    rm -f "$STATE"
+    say "enzimOS removed. Your previous desktop and credential provider are kept."
+}
+
+status() {
+    if repo_configured; then
+        echo "repository: configured ($(sed -n 's/^Server = //p' "$REPO_CONF" 2>/dev/null))"
+    else
+        local server
+        server=$(pacman-conf --config "$PACMAN_CONF" --repo "$REPO_NAME" Server 2>/dev/null || true)
+        server=${server%%$'\n'*}
+        if [[ -n $server ]]; then echo "repository: configured ($server)"; else echo "repository: not configured"; fi
+    fi
+    if pacman-key --list-keys "$KEY_FINGERPRINT" >/dev/null 2>&1; then echo "key: present"; else echo "key: absent"; fi
+    pacman -Sl "$REPO_NAME" 2>/dev/null | awk '$4 ~ /installed/ {print "installed: " $2 " " $3}' || true
+}
+
+main() {
+    COMMAND=${1:-}; shift || true
+    ASSUME_YES=0 WITH_APPS=0 WITH_AI=0 WITH_MODELS=0 WITH_FLATPAK_APPS=0 WITH_GREETER=0
+    REPLACE_FLATPAKS=0 PURGE_USER_DATA=0
+    for arg in "$@"; do
+        case $arg in
+            --yes) ASSUME_YES=1 ;;
+            --apps) WITH_APPS=1 ;;
+            --ai) WITH_AI=1 ;;
+            --models) WITH_AI=1 WITH_MODELS=1 ;;
+            --flatpak-apps) WITH_FLATPAK_APPS=1 ;;
+            --greeter) WITH_GREETER=1 ;;
+            --replace-flatpaks) REPLACE_FLATPAKS=1 ;;
+            --purge-user-data) PURGE_USER_DATA=1 ;;
+            -h|--help) usage ;;
+            *) die "unknown option $arg" ;;
+        esac
+    done
+    NOCONFIRM=()
+    [[ $ASSUME_YES == 1 ]] && NOCONFIRM=(--noconfirm)
+    if [[ $COMMAND == install || $COMMAND == remove ]]; then
+        need_root
+        exec 9>/run/lock/enzimos-try.lock
+        flock -n 9 || die "another enzimos-try operation is running"
+    fi
+    case $COMMAND in
+        install) install ;;
+        remove) remove ;;
+        status) status ;;
+        -h|--help|help|"") usage ;;
+        *) die "unknown command $COMMAND" ;;
+    esac
+}
+
+# Tests source this file for its functions.
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+    main "$@"
+fi

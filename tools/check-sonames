@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Check that a target distribution still provides the library versions the
+enzimOS packages were built against.
+
+    check-sonames REPO_DB TARGET_DB [TARGET_DB ...]
+
+REPO_DB is the built repository's database (OUT/enzimos/x86_64/enzimos.db);
+each TARGET_DB a sync database of the distribution to serve, such as Arch's
+/var/lib/pacman/sync/{core,extra}.db or Manjaro's or CachyOS's downloaded
+copies. Every `libfoo.so=VERSION-64` dependency of an enzimOS package must be
+provided by some target package; otherwise that distribution's users would be
+refused the upgrade (pacman keeps the old library) or, without the soname
+dependency, get a desktop that does not start. Exit status 1 lists them:
+rebuild the packages on that distribution's current libraries.
+"""
+import sys
+import tarfile
+
+
+def entries(path):
+    """(name, depends, provides) for every package in a pacman database."""
+    rows = {}
+    with tarfile.open(path) as archive:
+        for member in archive:
+            if not member.isfile() or not member.name.endswith('/desc'):
+                continue
+            fields, key = {}, None
+            for line in archive.extractfile(member).read().decode().splitlines():
+                if line.startswith('%') and line.endswith('%'):
+                    key = line.strip('%')
+                    fields[key] = []
+                elif line and key:
+                    fields[key].append(line)
+            name = fields.get('NAME', [''])[0]
+            rows[name] = (fields.get('DEPENDS', []), fields.get('PROVIDES', []))
+    return rows
+
+
+def main(repo, targets):
+    ours = entries(repo)
+    provided = set()
+    for target in targets:
+        for depends, provides in entries(target).values():
+            provided.update(provides)
+    for depends, provides in ours.values():
+        provided.update(provides)
+    missing = sorted({(name, dep) for name, (depends, _) in ours.items()
+                      for dep in depends if '.so=' in dep and dep not in provided})
+    for name, dep in missing:
+        print(f'{name}: {dep} is not provided')
+    return 1 if missing else 0
+
+
+if __name__ == '__main__':
+    if len(sys.argv) < 3:
+        sys.exit(__doc__)
+    sys.exit(main(sys.argv[1], sys.argv[2:]))
