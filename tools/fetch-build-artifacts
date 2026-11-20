@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Download and verify a completed native package build for release review."""
+import argparse
+import base64
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+
+REPOSITORY = "enz1m/enzimos-arch"
+COHORTS = {
+    "host-services": (
+        "Build native host services",
+        "host-service-",
+        {"enzimos-app-permissions", "enzimos-background-apps", "enzui-mcp-center", "enzimos-phone-link"},
+    ),
+    "native-apps": (
+        "Build native desktop apps",
+        "native-app-",
+        {"enzimos-files", "enzimos-store", "enzimos-task-manager", "enzimos-terminal", "enzimos-text"},
+    ),
+}
+
+
+def gh_json(*arguments):
+    return json.loads(subprocess.check_output(["gh", *arguments]))
+
+
+def verify_build(cohort, run_id, output):
+    workflow_name, artifact_prefix, components = COHORTS[cohort]
+    workflow = f".github/workflows/{cohort}.yml"
+    run = gh_json("run", "view", run_id, "--repo", REPOSITORY,
+                  "--json", "headSha,headBranch,conclusion,event,workflowName")
+    if (run["conclusion"] != "success" or run["headBranch"] != "main"
+            or run["workflowName"] != workflow_name
+            or run["event"] not in ("push", "workflow_dispatch")):
+        raise ValueError(f"Select a successful {workflow_name} run on main.")
+    sha = run["headSha"]
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise ValueError("Invalid build revision.")
+    commit = gh_json("api", f"repos/{REPOSITORY}/commits/{sha}")
+    if commit["sha"] != sha or not commit["commit"]["verification"]["verified"]:
+        raise ValueError("The workflow commit requires a verified GitHub signature.")
+    lock = gh_json("api", f"repos/{REPOSITORY}/contents/packaging/{cohort}/sources.json?ref={sha}")
+    pins = json.loads(base64.b64decode(lock["content"]))
+    if set(pins) != components:
+        raise ValueError("Unexpected packages in the build input list.")
+
+    output = output.resolve()
+    if output.exists():
+        raise ValueError("Choose a new review directory.")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=f".{cohort}-review-", dir=output.parent) as temporary:
+        staging = Path(temporary) / "packages"
+        subprocess.run(["gh", "run", "download", run_id, "--repo", REPOSITORY, "--dir", str(staging),
+                        "--pattern", artifact_prefix + "*"], check=True)
+        if {entry.name for entry in staging.iterdir()} != {artifact_prefix + name for name in components}:
+            raise ValueError("The run must contain one build artifact per package.")
+        for service in sorted(components):
+            directory = staging / (artifact_prefix + service)
+            pin = pins[service]
+            package_name = f'{service}-{pin["version"]}-{pin["release"]}-x86_64.pkg.tar.zst'
+            expected = {package_name, "build.json", "build-environment.txt"}
+            if {entry.name for entry in directory.iterdir()} != expected:
+                raise ValueError(f"Unexpected files were uploaded for {service}.")
+            for name in sorted(expected):
+                path = directory / name
+                if not path.is_file() or path.is_symlink():
+                    raise ValueError(f"Expected a regular artifact for {service}.")
+                subprocess.run(["gh", "attestation", "verify", str(path), "--repo", REPOSITORY,
+                                "--signer-workflow", f"{REPOSITORY}/{workflow}", "--source-digest", sha,
+                                "--deny-self-hosted-runners"], check=True)
+            receipt = json.loads((directory / "build.json").read_text())
+            with (directory / package_name).open("rb") as source:
+                digest = hashlib.file_digest(source, "sha256").hexdigest()
+            verified = {"package_name": service, "package": package_name, "sha256": digest,
+                        "source": f"https://github.com/enz1m/{pin.get('repo', service)}", "revision": pin["commit"],
+                        "version": pin["version"], "release": pin["release"], "rust": pin["rust"],
+                        "release_authorized": False}
+            if any(receipt.get(field) != value for field, value in verified.items()):
+                raise ValueError(f"The attested build receipt differs from the reviewed inputs for {service}.")
+        staging.rename(output)
+    print(f"Verified {len(components)} candidates for review in {output}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("cohort", choices=COHORTS)
+    parser.add_argument("run_id")
+    parser.add_argument("output", type=Path)
+    args = parser.parse_args()
+    if not re.fullmatch(r"[0-9]+", args.run_id):
+        parser.error("Use the numerical GitHub Actions run ID.")
+    try:
+        verify_build(args.cohort, args.run_id, args.output)
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+        parser.exit(1, f"Artifact verification failed. {error}\n")
+
+
+if __name__ == "__main__":
+    main()

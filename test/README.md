@@ -40,6 +40,7 @@ second `python3 -m http.server` in this repository), then:
 ```sh
 sudo ENZIMOS_REPO_URL=http://10.0.2.2:18093/enzimos/x86_64 \
      ENZIMOS_KEY_FILE=enzimos-packages.asc \
+     ENZIMOS_KEY_FINGERPRINT=316DD17C64DB52ABEFA9B558AA8B1E969F33214C \
      ./enzimos-try install --apps
 ```
 

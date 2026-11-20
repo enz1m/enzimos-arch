@@ -5,12 +5,12 @@
 pkgbase=enzimos-meta
 pkgname=(enzimos-desktop enzimos-apps enzimos-ai enzimos-flatpak-remote)
 pkgver=0.1.0
-pkgrel=2
+pkgrel=3
 arch=('any')
 url='https://github.com/enz1m'
 license=('MIT')
 source=('enzimos.flatpakrepo')
-sha256sums=('6810e7f8d6a0a0f0e5de1acd59c7228686b3de3ea693d664fe892ff100c9278c')
+sha256sums=('d9628aee0aaca7826c9410719b1d72daefe9d55ffc9a813c831b7ff7979c89ff')
 
 package_enzimos-desktop() {
     pkgdesc='enzimOS desktop (enzUI session, Settings, Files, Terminal, Store) as an extra session'

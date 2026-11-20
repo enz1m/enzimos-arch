@@ -22,9 +22,10 @@
 set -euo pipefail
 
 REPO_NAME=enzimos
-REPO_URL=${ENZIMOS_REPO_URL:-https://packages.enzimos.invalid/arch/$REPO_NAME/x86_64}
-KEY_URL=${ENZIMOS_KEY_URL:-https://packages.enzimos.invalid/arch/enzimos-packages.asc}
-KEY_FINGERPRINT=316DD17C64DB52ABEFA9B558AA8B1E969F33214C
+REPO_URL=${ENZIMOS_REPO_URL:-https://packages.enzim.dev/$REPO_NAME/x86_64}
+KEY_URL=${ENZIMOS_KEY_URL:-https://packages.enzim.dev/enzimos-packages.asc}
+KEY_FINGERPRINT=${ENZIMOS_KEY_FINGERPRINT:-66CEB56F3018F39D2491A3B24C558611AFC55399}
+LEGACY_KEY_FINGERPRINT=316DD17C64DB52ABEFA9B558AA8B1E969F33214C
 PACMAN_CONF=${ENZIMOS_PACMAN_CONF:-/etc/pacman.conf}
 REPO_CONF=${ENZIMOS_REPO_CONF:-/etc/pacman.d/enzimos-repo.conf}
 STATE=/var/lib/enzimos-try/state
@@ -33,9 +34,6 @@ USER_RUNTIMES=/run/user
 MARK_BEGIN='# >>> enzimos-try: enzimOS packages'
 MARK_END='# <<< enzimos-try'
 NATIVE_APPS=(io.github.enzui.Files io.github.enzui.Terminal io.github.enzui.Store)
-# Offered from the enzimOS Flatpak repository.
-FLATPAK_APPS=(org.enzimos.Calculator io.enz.Messages io.github.enzui.Music org.enzimos.Photos
-              io.github.enzui.Remote io.github.enzui.Reader io.github.enzui.Calendar)
 # The person who ran sudo: their own Flatpak installation and settings.
 TARGET_USER=${SUDO_USER:-}
 
@@ -144,10 +142,6 @@ preflight() {
     [[ ${ID:-} == arch || " ${ID_LIKE:-} " == *" arch "* ]] \
         || die "needs an Arch-based system (found ${PRETTY_NAME:-unknown})"
     command -v pacman >/dev/null || die "pacman is missing"
-    if [[ $REPO_URL == https://packages.enzimos.invalid/* ]] &&
-        ! pacman-conf --config "$PACMAN_CONF" --repo-list | grep -qxF "$REPO_NAME"; then
-        die "no hosted package repository is configured; set ENZIMOS_REPO_URL and ENZIMOS_KEY_FILE to a signed build"
-    fi
     [[ $(uname -m) == x86_64 ]] || die "only x86_64 is built"
     # The session runs on systemd user services (Artix and other init systems lack them).
     [[ -d /run/systemd/system ]] || die "needs systemd as the init system"
@@ -169,6 +163,7 @@ repo_configured() { grep -qxF "$MARK_BEGIN" "$PACMAN_CONF"; }
 
 add_repo() {
     local repositories create_repo=0 config
+    [[ $KEY_FINGERPRINT =~ ^[A-F0-9]{40}$ ]] || die "use the full uppercase signing key fingerprint"
     repositories=$(pacman-conf --config "$PACMAN_CONF" --repo-list) || die "cannot read pacman repositories"
     if ! repo_configured; then
         if grep -qxF "$REPO_NAME" <<< "$repositories"; then
@@ -210,7 +205,7 @@ add_repo() {
             die "could not enroll the enzimOS signing key"
         fi
         rm -rf -- "$scratch"
-        if ! grep -qx key "$STATE" && ! echo key >> "$STATE"; then
+        if ! printf 'key %s\n' "$KEY_FINGERPRINT" >> "$STATE"; then
             pacman-key --delete "$KEY_FINGERPRINT" >/dev/null 2>&1 || true
             die "could not record signing key enrollment in the journal"
         fi
@@ -218,7 +213,7 @@ add_repo() {
     if (( create_repo )); then
         say "Adding the [$REPO_NAME] repository"
         # pacman.conf holds the section header; the included file its settings.
-        (set -o noclobber; printf 'SigLevel = Required\nServer = %s\n' "$REPO_URL" > "$REPO_CONF") || die "could not create $REPO_CONF"
+        (set -o noclobber; printf 'SigLevel = Required TrustedOnly\nServer = %s\n' "$REPO_URL" > "$REPO_CONF") || die "could not create $REPO_CONF"
         local temporary
         if ! temporary=$(mktemp "${config}.enzimos.XXXXXX"); then
             rm -f -- "$REPO_CONF"
@@ -301,9 +296,17 @@ remove_repo() {
         fi
         rm -f -- "$REPO_CONF" || die "could not remove $REPO_CONF"
     fi
-    if grep -qx key "$STATE" 2>/dev/null && pacman-key --list-keys "$KEY_FINGERPRINT" >/dev/null 2>&1; then
-        pacman-key --delete "$KEY_FINGERPRINT" >/dev/null || die "could not remove the signing key"
+    local enrolled_keys=() fingerprint
+    mapfile -t enrolled_keys < <(awk '$1 == "key" && NF == 2 {print $2}' "$STATE" | sort -u)
+    if grep -qx key "$STATE"; then
+        enrolled_keys+=("${ENZIMOS_KEY_FINGERPRINT:-$LEGACY_KEY_FINGERPRINT}")
     fi
+    for fingerprint in "${enrolled_keys[@]}"; do
+        [[ $fingerprint =~ ^[A-F0-9]{40}$ ]] || die "invalid signing key fingerprint in the ownership journal"
+        if pacman-key --list-keys "$fingerprint" >/dev/null 2>&1; then
+            pacman-key --delete "$fingerprint" >/dev/null || die "could not remove the signing key"
+        fi
+    done
 }
 
 # Natively shipped apps that are also Flatpaks: "ID SCOPE" per line.
@@ -424,18 +427,22 @@ install() {
         done
     fi
     if [[ $WITH_FLATPAK_APPS == 1 ]]; then
-        say "Installing the enzimOS Flatpak apps"
-        for id in "${FLATPAK_APPS[@]}"; do
+        say "Installing published enzimOS Flatpak apps"
+        local published_apps
+        if ! published_apps=$(flatpak remote-ls --system --app --arch=x86_64 --columns=application,branch enzimos); then
+            die "the desktop packages are installed, but the enzimOS Flatpak remote could not be read"
+        fi
+        while read -r id; do
             if [[ -n $(flatpak_scopes "$id") ]]; then
                 echo "    $id is already installed; left as it is"
                 continue
             fi
-            if flatpak install --system --noninteractive enzimos "$id"; then
+            if flatpak install --system --noninteractive enzimos "$id//stable"; then
                 echo "flatpak-app $id" >> "$STATE"
             else
                 flatpak_failed=1
             fi
-        done
+        done < <(awk '$2 == "stable" && !seen[$1]++ {print $1}' <<< "$published_apps")
     fi
     [[ $WITH_GREETER == 1 ]] && switch_to_greeter
     if [[ $(pacman -Q linux 2>/dev/null || true) != "$kernel_before" ]]; then

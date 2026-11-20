@@ -20,7 +20,7 @@ calls_add_repo() { add_repo >/dev/null; }
 calls_add_repo
 grep -qx '\[enzimos\]' "$PACMAN_CONF" || { echo "FAIL: section not added"; exit 1; }
 grep -qx "Include = $REPO_CONF" "$PACMAN_CONF" || { echo "FAIL: include not added"; exit 1; }
-grep -qx 'SigLevel = Required' "$REPO_CONF"
+grep -qx 'SigLevel = Required TrustedOnly' "$REPO_CONF"
 [[ $(grep -c '^\[enzimos\]' "$PACMAN_CONF" "$REPO_CONF" | awk -F: '{s+=$2} END {print s}') == 1 ]] || { echo "FAIL: duplicate section header"; exit 1; }
 add_repo >/dev/null   # a second run adds nothing
 [[ $(grep -c '^\[enzimos\]' "$PACMAN_CONF") == 1 ]] || { echo "FAIL: added twice"; exit 1; }
@@ -78,3 +78,17 @@ fi
 cmp "$work/pacman-custom" "$work/edited"
 [[ -f $REPO_CONF && -s $STATE ]]
 echo "ok changed repository block preserved"
+
+# Removing a lab installation after switching defaults still uses the key it
+# enrolled. Older journals without the fingerprint belong to the lab key.
+unset ENZIMOS_KEY_FINGERPRINT
+pacman-key() {
+    if [[ $1 == --delete ]]; then printf '%s\n' "$2" >> "$work/deleted-keys"; fi
+    return 0
+}
+printf 'key %s\n' "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" > "$STATE"
+remove_repo
+printf 'key\n' > "$STATE"
+remove_repo
+printf '%s\n' AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA "$LEGACY_KEY_FINGERPRINT" | cmp - "$work/deleted-keys"
+echo "ok signing key removal follows the recorded enrollment"

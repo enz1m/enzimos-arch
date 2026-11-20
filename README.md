@@ -7,9 +7,10 @@ versions available on its target distribution.
 
 ## Use
 
-A fresh install needs a signed package repository and its public key. Set
-`ENZIMOS_REPO_URL` to the repository URL and `ENZIMOS_KEY_FILE` to the local
-public-key file. See the [VM testing guide](test/README.md) for an example.
+A fresh install uses the signed repository at `packages.enzim.dev` and verifies
+its public key against the pinned production fingerprint. For a lab repository,
+set `ENZIMOS_REPO_URL`, `ENZIMOS_KEY_FILE` and `ENZIMOS_KEY_FINGERPRINT` to
+the matching test values. See the [VM testing guide](test/README.md).
 
 ```sh
 sudo ./enzimos-try install              # desktop: session, Settings, Files, Terminal, Store
@@ -46,9 +47,9 @@ packages declaring replacements or conflicts, so a whole-system upgrade cannot
 replace GNOME Keyring through that repository.
 Default installation adds an enzUI session without changing SDDM/GDM or their
 PAM configuration. Only `--greeter` opts into changing the login manager.
-The `--flatpak-apps` option requires a published enzimOS Flatpak remote. The
-descriptor in `packaging/` uses a placeholder endpoint until the remote is
-available.
+The `--flatpak-apps` option installs the stable apps currently available from the
+signed enzimOS Flatpak remote at `flatpak.enzim.dev`. Installations of the same
+apps that are already present are preserved.
 
 If a fresh install fails before adding packages (for example an unreachable
 repository), it removes its newly added repository/key automatically. A completed
@@ -75,6 +76,10 @@ is suspended when the graphical session locks. Existing phone pairings are kept.
 | `test/` | a local repository server and a VM script for testing on a real distribution |
 
 ## Build a repository
+
+See the [host-service build recipes](packaging/host-services/README.md) and
+[desktop app source pins](packaging/native-apps/sources.json) for native CI.
+Verify a completed app build with `tools/fetch-build-artifacts native-apps RUN_ID OUTPUT`.
 
 Use a build machine that matches the target distribution's package libraries.
 The desktop packager needs an enzUI desktop export and the enzimOS workspace's
@@ -115,7 +120,3 @@ tests/test-safeguards
 ## License
 
 MIT
-
-## Host services
-
-See the [host-service build recipes](packaging/host-services/README.md) for the Arch package candidates and GitHub Actions workflow.
