@@ -22,7 +22,7 @@
   },
   "enzimos-text": {
     "repo": "text",
-    "commit": "e2e084f2e61f85c27e0860a50e0bb84ba36d631c",
+    "commit": "cbfaf302392a61d2be3819c73e105af727c51f6b",
     "version": "0.1.0",
     "release": 1,
     "rust": "1.99.1"
