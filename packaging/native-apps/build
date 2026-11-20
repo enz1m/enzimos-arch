@@ -95,7 +95,7 @@ case "$app" in
         ;;
 esac
 id="io.github.enzui.$entry"
-sed -E "s|^(Exec|TryExec)=$binary( |$)|\1=$executable\2|" "assets/$id.desktop" > "$assembly/$id.desktop"
+sed -E "s@^(Exec|TryExec)=$binary( |$)@\1=$executable\2@" "assets/$id.desktop" > "$assembly/$id.desktop"
 desktop-file-validate "$assembly/$id.desktop"
 copy "$assembly/$id.desktop" "usr/share/applications/$id.desktop" 0644
 copy "assets/$id.metainfo.xml" "usr/share/metainfo/$id.metainfo.xml" 0644
@@ -103,17 +103,25 @@ copy "assets/$id.svg" "usr/share/icons/hicolor/scalable/apps/$id.svg" 0644
 copy LICENSE "usr/share/licenses/$app/LICENSE" 0644
 copy README.md "usr/share/doc/$app/README.md" 0644
 
-# Include the notices from the exact framework and Iced Git dependencies.
+# Include the notices from the exact Git dependencies used by the build.
 cargo metadata --locked --offline --format-version 1 --filter-platform x86_64-unknown-linux-gnu \
     "${features[@]}" > "$base/metadata.json"
-for crate in enzui-core iced; do
-    manifest=$(jq -er --arg crate "$crate" '.packages[] | select(.name == $crate and (.source // "" | startswith("git+https://github.com/enz1m/"))) | .manifest_path' "$base/metadata.json")
+git_dependencies=$(jq -er '[.packages[] | select((.source // "") | startswith("git+https://github.com/enz1m/"))]
+    | unique_by(.source)[] | [.source, .manifest_path] | @tsv' "$base/metadata.json")
+while IFS=$'\t' read -r dependency manifest; do
     project=$(git -C "$(dirname -- "$manifest")" rev-parse --show-toplevel)
-    copy "$project/LICENSE" "usr/share/licenses/$app/$crate-LICENSE" 0644
-    if [[ $crate == iced ]]; then
-        copy "$project/graphics/fonts/FiraSans-Regular.OFL.txt" "usr/share/licenses/$app/FiraSans-OFL.txt" 0644
+    origin=${dependency%%[?#]*}
+    origin=${origin##*/}
+    revision=${dependency##*#}
+    [[ $origin =~ ^[a-zA-Z0-9._-]+\.git$ && $revision =~ ^[0-9a-f]{40}$ ]]
+    notice_dir="usr/share/licenses/$app/${origin%.git}/$revision"
+    for notice in "$project"/LICENSE* "$project"/COPYING* "$project"/NOTICE*; do
+        if [[ -f $notice ]]; then copy "$notice" "$notice_dir/${notice##*/}" 0644; fi
+    done
+    if [[ $origin == enzim-iced.git ]]; then
+        copy "$project/graphics/fonts/FiraSans-Regular.OFL.txt" "$notice_dir/FiraSans-OFL.txt" 0644
     fi
-done
+done <<< "$git_dependencies"
 cd "$assembly"
 {
     printf 'pkgname=%q\npkgver=%q\npkgrel=%q\npkgdesc=%q\nurl=%q\n' "$app" "$version" "$release" "$description" "$source_url"
