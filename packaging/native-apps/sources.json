@@ -1,7 +1,7 @@
 {
   "enzimos-files": {
     "repo": "files",
-    "commit": "c546da0f73cf5cc7cc88de40bb9bc0bb3fdd441a",
+    "commit": "92de15f50c344d62d99f6a15e445328f8c40b61b",
     "version": "0.1.0",
     "release": 1,
     "rust": "1.99.1"
