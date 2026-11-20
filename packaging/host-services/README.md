@@ -22,5 +22,10 @@ review. The Pacman repository accepts a separately signed snapshot.
 Phone Link builds its Wayland workers using three checksummed protocol files
 from the public Hyprland revision pinned by the enzimOS shell build. Keep that
 revision and `phone-protocols.sha256` in sync when changing the compositor
-protocols. Native desktop integration is still checked in a disposable Arch
-guest before promoting a release.
+protocols. The package includes the notices from those protocol files.
+
+Before promotion, run `python3 -m unittest discover -s packaging -p
+test_start_host.py` from the pinned Phone Link checkout in a disposable Arch
+guest. The installed-launcher test uses Bubblewrap's user namespaces to stage
+the system paths. The hosted build container runs the Phone Link Rust tests
+with networking disabled and the standard container syscall restrictions.

@@ -72,7 +72,6 @@ SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
 cargo build --release --locked --offline --workspace --all-features --bins
 if [[ $service == enzimos-phone-link ]]; then
     cargo test --release --locked --offline --workspace --all-features --lib
-    python -m unittest discover -s packaging -p test_start_host.py
 else
     cargo test --release --locked --offline --all-features --all-targets
 fi
@@ -117,6 +116,9 @@ case "$service" in
             ENZUI_COMPOSITOR_SETUP_DIR="$protocol_root" "scripts/build-$worker"
             copy "target/$worker/enzremote-$worker" "usr/libexec/enzimos-phone-link/enzremote-$worker" 0755
         done
+        while read -r _ file; do
+            copy "$protocols/$file" "usr/share/licenses/$service/protocols/$file" 0644
+        done < "$recipe_dir/phone-protocols.sha256"
         for helper in desktop-input portal-session-helper xdph-output-picker; do
             copy "scripts/$helper" "usr/libexec/enzimos-phone-link/$helper" 0755
         done
