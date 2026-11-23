@@ -8,6 +8,7 @@ dependencies=(glibc gcc-libs wayland libxkbcommon mesa fontconfig vulkan-icd-loa
 build_dependencies=(glib2 wayland libxkbcommon mesa fontconfig vulkan-icd-loader)
 optional=()
 features=()
+test_args=()
 case "$app" in
     enzimos-files)
         binary=files-app entry=Files description='enzUI file manager'
@@ -15,6 +16,14 @@ case "$app" in
         dependencies+=(libarchive glib2 systemd-libs gstreamer gst-plugins-base-libs curl poppler-glib libheif)
         build_dependencies+=(libarchive systemd-libs gstreamer gst-plugins-base-libs curl poppler-glib libheif)
         optional=('udisks2: mount disk images' 'yt-dlp: inspect media-service URLs' 'ffmpeg: merge media streams')
+        ;;
+    enzimos-music)
+        binary=music-app entry=Music description='enzUI music, podcast and internet radio player'
+        dependencies+=(glib2 gstreamer gst-plugins-base-libs gst-plugins-base gst-plugins-good curl)
+        build_dependencies+=(gstreamer gst-plugins-base-libs curl openssl)
+        optional=('gst-libav: additional audio codecs' 'gst-plugins-bad: additional demuxers and decoders')
+        test_args=(-- --test-threads=1)
+        export ICED_TEST_BACKEND=software
         ;;
     enzimos-terminal)
         binary=terminal-emulator entry=Terminal description='enzUI terminal emulator'
@@ -64,7 +73,7 @@ cd "$source_dir"
 export SOURCE_DATE_EPOCH
 SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
 cargo build --release --locked --offline "${features[@]}" --bin "$binary"
-cargo test --release --locked --offline "${features[@]}"
+cargo test --release --locked --offline "${features[@]}" "${test_args[@]}"
 
 output=${NATIVE_PACKAGE_OUTPUT:-/output}
 assembly="$base/assembly"
@@ -72,7 +81,9 @@ payload="$assembly/payload"
 mkdir -p "$payload" "$output"
 copy() { install -Dm "$3" -- "$1" "$payload/$2"; }
 executable="/usr/lib/enzui/apps/$binary"
-if [[ $app == enzimos-store ]]; then executable=/usr/bin/store-app; fi
+case "$app" in
+    enzimos-music|enzimos-store) executable="/usr/bin/$binary" ;;
+esac
 copy "target/release/$binary" "${executable#/}" 0755
 case "$app" in
     enzimos-terminal)
@@ -120,6 +131,10 @@ while IFS=$'\t' read -r dependency manifest; do
     done
     if [[ $origin == enzim-iced.git ]]; then
         copy "$project/graphics/fonts/FiraSans-Regular.OFL.txt" "$notice_dir/FiraSans-OFL.txt" 0644
+    fi
+    if [[ $app == enzimos-music && $origin == enzui.git ]]; then
+        copy "$project/vendor/gst-curl/LICENSE-MIT" "$notice_dir/gst-curl/LICENSE-MIT" 0644
+        copy "$project/vendor/gst-curl/UPSTREAM.json" "$notice_dir/gst-curl/UPSTREAM.json" 0644
     fi
 done <<< "$git_dependencies"
 cd "$assembly"

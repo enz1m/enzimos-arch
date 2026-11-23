@@ -20,7 +20,7 @@ COHORTS = {
     "native-apps": (
         "Build native desktop apps",
         "native-app-",
-        {"enzimos-files", "enzimos-store", "enzimos-task-manager", "enzimos-terminal", "enzimos-text"},
+        {"enzimos-files", "enzimos-music", "enzimos-store", "enzimos-task-manager", "enzimos-terminal", "enzimos-text"},
     ),
 }
 

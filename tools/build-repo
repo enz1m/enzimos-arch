@@ -56,6 +56,7 @@ def rows(value):
             yield from rows(item)
 
 META_PACKAGES = {'enzimos-desktop', 'enzimos-apps', 'enzimos-ai', 'enzimos-flatpak-remote'}
+OPTIONAL_COMPONENTS = {'enzimos-music'}
 
 
 def checksum(path):
@@ -94,7 +95,7 @@ def collect(report_dirs, workspace, components=COMPONENTS):
                 continue
             for row in rows(data):
                 name = row['package_name']
-                if name not in components or name in found:
+                if (name not in components and name not in OPTIONAL_COMPONENTS) or name in found:
                     continue
                 path = Path(row['package'])
                 if not path.is_absolute():

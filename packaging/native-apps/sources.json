@@ -33,5 +33,12 @@
     "version": "0.1.0",
     "release": 1,
     "rust": "1.99.1"
+  },
+  "enzimos-music": {
+    "repo": "music",
+    "commit": "70aaf0051209c35835d535bab13420acbd84281e",
+    "version": "0.2.1",
+    "release": 1,
+    "rust": "1.99.1"
   }
 }
