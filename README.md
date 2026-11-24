@@ -72,6 +72,7 @@ is suspended when the graphical session locks. Existing phone pairings are kept.
 | `packaging/PKGBUILD` | meta-packages: `enzimos-desktop`, `enzimos-apps`, `enzimos-ai`, `enzimos-flatpak-remote` |
 | `tools/build-desktop-package` | packages the enzUI session and optional greeter separately |
 | `tools/build-repo` | collects the component packages from the enzimOS build, signs everything, writes the repository |
+| `tools/build-os-repo` | adds the `enzimos-os` system repository that the installation media builder reads |
 | `tools/check-sonames` | checks a distribution still provides the library versions the packages need |
 | `test/` | a local repository server and a VM script for testing on a real distribution |
 
@@ -108,6 +109,29 @@ Pass `--profile desktop` to build a smaller repository with the session,
 native apps and required services. The default `full` profile adds the
 optional AI packages. Use `tools/check-sonames` with the target
 distribution's sync databases before publishing a build.
+
+## System repository
+
+The [ISO builder](https://github.com/enz1m/enzimos-build) also reads the
+signed `enzimos-os` repository at `packages.enzim.dev/enzimos-os/x86_64`. It
+holds the installer, recovery and update runtimes, system policy, the
+greetd, keyring and portal replacements, the local AI packages, the recovery
+environment and two data packages: the staged desktop and the live installer
+runtime layout. Arch systems never configure it.
+
+```sh
+tools/build-os-repo --reports /path/to/build-report.json ... \
+    --desktop-stage /path/to/desktop --runtime-layout /path/to/runtime-layout \
+    --release N --signer /path/to/gnupg --output /tmp/enzimos-os
+python3 ../enzimos-arch-release/tools/repo_release.py bundle --signer /path/to/gnupg \
+    --key 66CEB56F3018F39D2491A3B24C558611AFC55399 --parent ACTIVE_RELEASE \
+    --repository /tmp/enzimos-os --published-db /tmp/enzimos-os/enzimos.db \
+    --published-db PUBLISHED_ENZIMOS_OS_DB --output repository.tar.gz
+```
+
+Applications that are also in the add-on repository go into the system
+repository only when their build is newer. The ISO builder takes the newest
+version of each package across both repositories.
 
 ## Tests
 
