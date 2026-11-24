@@ -8,6 +8,10 @@ After=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/usr/lib/enzimos-store/flatpak-auto-update system
+# The permission service takes its policy lock in a private runtime directory.
+RuntimeDirectory=enzimos-flatpak-update
+RuntimeDirectoryMode=0700
+Environment=XDG_RUNTIME_DIR=%t/enzimos-flatpak-update
 Nice=19
 CPUSchedulingPolicy=idle
 IOSchedulingClass=idle

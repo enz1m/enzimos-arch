@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Background updates apply only signed app updates that ask for no new access,
+# and an account's opt-out is read without waiting on what the account put there.
+set -euo pipefail
+here=$(cd "$(dirname "$0")/.." && pwd)
+updater=$here/packaging/native-apps/store-updates/flatpak-auto-update
+work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+mkdir -p "$work/bin" "$work/home"
+log=$work/calls
+
+cat > "$work/bin/flatpak" <<'EOF'
+#!/bin/sh
+echo "flatpak $*" >> "$CALLS"
+case "$*" in
+    remotes*) printf 'fixture\t\nparked\tdisabled\n' ;;
+    *"--app --columns=application fixture") printf 'org.example.Signed\norg.example.MoreAccess\norg.example.Unsigned\norg.example.Current\n' ;;
+    *"--runtime --columns=ref fixture") printf 'runtime/org.example.Platform/x86_64/1\n' ;;
+esac
+EOF
+cat > "$work/bin/enzimos-app-permissions" <<'EOF'
+#!/bin/sh
+request=$(cat)
+echo "worker $request" >> "$CALLS"
+signed=true more=false current=false
+case "$request" in
+    *org.example.MoreAccess*) more=true ;;
+    *org.example.Unsigned*) signed=false ;;
+    *org.example.Current*) current=true ;;
+esac
+case "$request" in
+    *update.confirm*) echo '{"ok":true,"result":{"status":"updated"}}' ;;
+    *) printf '{"ok":true,"result":{"no_update":%s,"requires_consent":%s,"permission_additions":%s,"review_token":"%s","remote":{"gpg_verify":true},"operations":[{"remote_identity":{"gpg_verify":%s}}]}}\n' \
+        "$current" "$more" "$([ "$more" = true ] && echo '[{"key":"devices"}]' || echo '[]')" \
+        "$(printf '%064d' 7)" "$signed" ;;
+esac
+EOF
+printf '#!/bin/sh\necho "u 0"\n' > "$work/bin/busctl"
+chmod +x "$work/bin"/*
+export PATH="$work/bin:$PATH" CALLS=$log HOME=$work/home XDG_DATA_HOME=$work/data
+mkdir -p "$XDG_DATA_HOME/store-app"
+setting=$XDG_DATA_HOME/store-app/automatic-updates
+
+fail() { echo "FAIL: $*"; cat "$log"; exit 1; }
+run() { : > "$log"; timeout 10 sh "$updater" "$@" > "$work/out" 2>&1 || fail "updater exited $? ($(cat "$work/out"))"; }
+
+run user
+grep -q 'update.confirm.*org.example.Signed' "$log" || fail "signed update not applied"
+! grep -q 'update.confirm.*org.example.\(MoreAccess\|Unsigned\|Current\)' "$log" ||
+    fail "an update needing review was applied"
+grep -qx 'flatpak update --user --noninteractive runtime/org.example.Platform/x86_64/1' "$log" ||
+    fail "runtime update not applied by ref"
+! grep -q 'parked' "$log" || fail "a disabled remote was listed"
+[[ $(grep -c '^flatpak update' "$log") == 1 ]] || fail "flatpak updated more than runtimes"
+echo "ok only reviewed updates without new access are applied"
+
+mkfifo "$setting"
+run user
+grep -q 'update.confirm' "$log" || fail "a FIFO turned updates off"
+rm "$setting"
+echo off > "$work/elsewhere"
+ln -s "$work/elsewhere" "$setting"
+run user
+grep -q 'update.confirm' "$log" || fail "a symlink turned updates off"
+rm "$setting"
+echo off > "$setting"
+run user
+[[ ! -s $log ]] || fail "updates ran while turned off"
+rm "$setting"
+echo "ok the opt-out is a regular file read without blocking"
+
+# A system run honours an account's opt-out under the data folder its session sets.
+cat > "$work/bin/getent" <<EOF
+#!/bin/sh
+echo "person:x:1000:1000::$work/home:/bin/sh"
+EOF
+printf '#!/bin/sh\necho XDG_DATA_HOME=%s\n' "$work/custom" > "$work/bin/systemctl"
+chmod +x "$work/bin/getent" "$work/bin/systemctl"
+mkdir -p "$work/custom/store-app"
+echo off > "$work/custom/store-app/automatic-updates"
+run system
+[[ ! -s $log ]] || fail "system updates ignored the session's opt-out"
+rm "$work/custom/store-app/automatic-updates"
+run system
+grep -q '"installation":"system"' "$log" || fail "system review did not target the system installation"
+echo "ok system updates honour each session's opt-out"

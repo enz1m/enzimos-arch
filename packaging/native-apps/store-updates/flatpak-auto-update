@@ -1,9 +1,11 @@
 #!/bin/sh
 # SPDX-License-Identifier: MIT
 # Updates the Flatpak apps of one installation in the background, unless the
-# connection is metered or automatic updates are turned off in Store. A
-# running app keeps its current version until it exits; Flatpak removes the
-# old one once nothing uses it.
+# connection is metered or automatic updates are turned off in Store. Each app
+# update goes through the permission service's review: one that asks for new
+# access or comes from a source that does not verify signatures is left for
+# Store, where the person confirms it. A running app keeps its current version
+# until it exits; Flatpak removes the old one once nothing uses it.
 set -eu
 scope="${1:-}"
 case "$scope" in
@@ -12,20 +14,39 @@ case "$scope" in
 esac
 # Store's switch, "off" in this file under its data folder.
 setting=store-app/automatic-updates
-turned_off() { [ -r "$1" ] && [ "$(head -c 16 "$1" | tr -d '[:space:]')" = off ]; }
+# The file belongs to an account, so read it as a regular file only and never
+# wait on it: a FIFO or a final symlink there is not a setting.
+turned_off() {
+    [ -f "$1" ] && [ ! -L "$1" ] &&
+        [ "$(dd if="$1" iflag=nonblock,nofollow bs=16 count=1 2>/dev/null | tr -d '[:space:]')" = off ]
+}
+# The data folder a running session gives Store, when it sets one.
+session_data_home() {
+    timeout 10 systemctl --user -M "$1@" show-environment 2>/dev/null |
+        sed -n 's/^XDG_DATA_HOME=\(\/.*\)$/\1/p' | head -n 1
+}
+any_account_turned_off() {
+    uid_min=$(awk '$1 == "UID_MIN" {print $2}' /etc/login.defs 2>/dev/null)
+    getent passwd | awk -F: -v min="${uid_min:-1000}" '$3 >= min && $3 < 60000 {print $1 ":" $6}' | {
+        while IFS=: read -r name home; do
+            data=$(session_data_home "$name")
+            for folder in "$home/.local/share" ${data:+"$data"}; do
+                if turned_off "$folder/$setting"; then
+                    echo "automatic updates are turned off in Store for $name: skipping"
+                    return 0
+                fi
+            done
+        done
+        return 1
+    }
+}
 if [ "$scope" = user ]; then
     if turned_off "${XDG_DATA_HOME:-$HOME/.local/share}/$setting"; then
         echo "automatic updates are turned off in Store: skipping"; exit 0
     fi
-else
+elif any_account_turned_off; then
     # Apps installed for everyone: any account that turned it off is respected.
-    uid_min=$(awk '$1 == "UID_MIN" {print $2}' /etc/login.defs 2>/dev/null)
-    homes=$(getent passwd | awk -F: -v min="${uid_min:-1000}" '$3 >= min && $3 < 60000 {print $6}')
-    for home in $homes; do
-        if turned_off "$home/.local/share/$setting"; then
-            echo "automatic updates are turned off in Store for $home: skipping"; exit 0
-        fi
-    done
+    exit 0
 fi
 # NetworkManager's Metered property: 1 yes, 3 guessed yes.
 metered=$(busctl --system get-property org.freedesktop.NetworkManager \
@@ -34,4 +55,56 @@ metered=$(busctl --system get-property org.freedesktop.NetworkManager \
 case "$metered" in
     1|3) echo "metered connection: skipping"; exit 0 ;;
 esac
-exec flatpak update "--$scope" --noninteractive
+
+# One request to the permission service; prints its reply.
+permissions() {
+    jq -nc --arg method "$1" --arg app "$2" --arg remote "$3" --arg scope "$scope" \
+        --arg token "${4:-}" '{schema_version: 1, method: $method, app_id: $app,
+            remote: $remote, installation: $scope}
+        + if $token == "" then {} else {review_token: $token, changes: []} end' |
+        enzimos-app-permissions
+}
+# The unattended verdict on an update review: current, unattended or held.
+verdict() {
+    jq -r 'if .ok != true then "held"
+        elif .result.no_update == true then "current"
+        elif .result.requires_consent == false
+            and .result.permission_additions == []
+            and .result.remote.gpg_verify == true
+            and (.result.operations | length) > 0
+            and all(.result.operations[]; .remote_identity.gpg_verify == true)
+        then "unattended" else "held" end' 2>/dev/null || echo held
+}
+remotes=$(flatpak remotes "--$scope" --columns=name,options)
+remotes=$(printf '%s\n' "$remotes" | awk -F'\t' '$2 !~ /(^|,)disabled(,|$)/ {print $1}')
+status=0
+for remote in $remotes; do
+    if ! apps=$(flatpak remote-ls "--$scope" --updates --app --columns=application "$remote"); then
+        echo "$remote: updates could not be listed" >&2; status=1; continue
+    fi
+    for app in $apps; do
+        review=$(permissions update.review "$app" "$remote") || true
+        case "$(printf '%s\n' "$review" | verdict)" in
+            current) ;;
+            unattended)
+                token=$(printf '%s\n' "$review" | jq -r '.result.review_token')
+                if permissions update.confirm "$app" "$remote" "$token" |
+                    jq -e '.ok == true and .result.status == "updated"' >/dev/null 2>&1; then
+                    echo "$app: updated"
+                else
+                    echo "$app: update failed" >&2; status=1
+                fi
+                ;;
+            *) echo "$app: update needs review in Store" ;;
+        esac
+    done
+    # Runtimes and extensions declare no permissions of their own.
+    if ! runtimes=$(flatpak remote-ls "--$scope" --updates --runtime --columns=ref "$remote"); then
+        echo "$remote: runtime updates could not be listed" >&2; status=1; continue
+    fi
+    if [ -n "$runtimes" ]; then
+        # shellcheck disable=SC2086 # one ref per word
+        flatpak update "--$scope" --noninteractive $runtimes || status=1
+    fi
+done
+exit "$status"

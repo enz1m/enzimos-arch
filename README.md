@@ -139,6 +139,7 @@ version of each package across both repositories.
 tests/test-pacman-conf
 tests/test-display-manager
 tests/test-safeguards
+tests/test-flatpak-auto-update
 ```
 
 ## License

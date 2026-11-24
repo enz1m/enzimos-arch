@@ -17,7 +17,7 @@
     "repo": "store",
     "commit": "4063da80b4bc0040f76d0d60bbd21d4608dcbc4f",
     "version": "0.1.0",
-    "release": 1,
+    "release": 2,
     "rust": "1.99.1"
   },
   "enzimos-text": {
