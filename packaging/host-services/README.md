@@ -1,7 +1,7 @@
 # Native host service builds
 
 The **Build native host services** workflow builds App Permissions,
-Background Apps, MCP Center and Phone Link for Arch x86-64. The checked-in
+Background Apps, MCP Center, Phone Link and Remote Access for Arch x86-64. The checked-in
 `sources.json` selects the exact signed GitHub commit, Rust toolchain, package
 version and release number for each service.
 
@@ -18,6 +18,11 @@ container as a regular user. Each output consists of a Pacman archive, a
 `build-environment.txt` listing the installed Arch build dependencies. An
 independent job attests the output files. These are candidates for release
 review. The Pacman repository accepts a separately signed snapshot.
+
+The Remote Access package contains the system units, policies and the
+`enzimos-remote` launcher. It requires the exact `enzimos-rust-remote-access`
+build that contains its binaries. Rebuild that package from the same source
+commit, and update the dependency, when a pin change alters the binaries.
 
 Phone Link builds its Wayland workers using three checksummed protocol files
 from the public Hyprland revision pinned by the enzimOS shell build. Keep that

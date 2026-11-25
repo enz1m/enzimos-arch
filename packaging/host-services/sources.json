@@ -22,5 +22,11 @@
     "version": "0.1.0",
     "release": 1,
     "rust": "1.99.1"
+  },
+  "enzimos-remote-access": {
+    "commit": "67455027a7f03551bd3c9681c06caeb8d447da95",
+    "version": "0.1.0",
+    "release": 92,
+    "rust": "1.95.0"
   }
 }

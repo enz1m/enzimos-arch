@@ -30,6 +30,13 @@ case "$service" in
             libei libxkbcommon wayland libnotify fontconfig mesa vulkan-icd-loader
             python-dbus python-gobject)
         ;;
+    enzimos-remote-access)
+        description='enzimOS SSH/SFTP hosting and encrypted desktop sharing'
+        # Binaries ship in enzimos-rust-remote-access, built from packaging/rust/runtime.json.
+        dependencies=(enzimos-rust-remote-access=0.2.0-1 polkit dbus-broker-units systemd openssh
+            iproute2 firewalld wayvnc)
+        build_dependencies=(dbus openssl openssh iproute2)
+        ;;
     *) echo 'Unknown host service.' >&2; exit 1 ;;
 esac
 if [[ $1 == install-deps ]]; then
@@ -135,6 +142,25 @@ case "$service" in
             project=$(git -C "$(dirname -- "$manifest")" rev-parse --show-toplevel)
             copy "$project/LICENSE" "usr/share/licenses/$service/$crate-LICENSE" 0644
         done
+        ;;
+    enzimos-remote-access)
+        install -d -- "$payload/usr/bin"
+        printf '#!/bin/sh\nexec /usr/lib/enzimos-remote/enzimos-remote-native "$@"\n' > "$payload/usr/bin/enzimos-remote"
+        chmod 0755 -- "$payload/usr/bin/enzimos-remote"
+        shopt -s nullglob
+        for unit in packaging/enzimos-*.service packaging/enzimos-*.timer; do
+            copy "$unit" "usr/lib/systemd/system/${unit#packaging/}" 0644
+        done
+        shopt -u nullglob
+        for preset in packaging/*.preset; do
+            copy "$preset" "usr/lib/systemd/system-preset/${preset#packaging/}" 0644
+        done
+        copy packaging/enzimosRemote.xml usr/lib/firewalld/policies/enzimosRemote.xml 0644
+        copy packaging/org.enzimos.Remote1.service usr/share/dbus-1/system-services/org.enzimos.Remote1.service 0644
+        copy packaging/org.enzimos.Remote1.conf usr/share/dbus-1/system.d/org.enzimos.Remote1.conf 0644
+        copy packaging/org.enzimos.Remote1.policy usr/share/polkit-1/actions/org.enzimos.Remote1.policy 0644
+        copy packaging/55-enzimos-sharing-firewall-info.rules usr/share/polkit-1/rules.d/55-enzimos-sharing-firewall-info.rules 0644
+        for doc in docs/*.md; do copy "$doc" "usr/share/doc/$service/${doc#docs/}" 0644; done
         ;;
 esac
 for file in LICENSE*; do copy "$file" "usr/share/licenses/$service/$file" 0644; done
