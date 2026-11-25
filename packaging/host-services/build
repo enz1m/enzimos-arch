@@ -32,9 +32,11 @@ case "$service" in
         ;;
     enzimos-remote-access)
         description='enzimOS SSH/SFTP hosting and encrypted desktop sharing'
-        # Binaries ship in enzimos-rust-remote-access, built from packaging/rust/runtime.json.
-        dependencies=(enzimos-rust-remote-access=0.2.0-1 polkit dbus-broker-units systemd openssh
-            iproute2 firewalld wayvnc)
+        dependencies=(polkit dbus-broker-units systemd openssh iproute2 firewalld wayvnc)
+        build_dependencies=(dbus openssl openssh iproute2)
+        ;;
+    enzimos-rust-remote-access)
+        description='enzimOS native runtime binaries'
         build_dependencies=(dbus openssl openssh iproute2)
         ;;
     *) echo 'Unknown host service.' >&2; exit 1 ;;
@@ -44,10 +46,22 @@ if [[ $1 == install-deps ]]; then
     exit
 fi
 [[ $EUID != 0 ]]
-read -r commit version release rust < <(jq -er --arg service "$service"     '.[$service] | [.commit,.version,.release,.rust] | @tsv' "$recipe_dir/sources.json")
-[[ $commit =~ ^[0-9a-f]{40}$ && $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$     && $release =~ ^[1-9][0-9]*$ && $rust =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+read -r repo commit version release rust < <(jq -er --arg service "$service" \
+    '.[$service] | [.repo // $service,.commit,.version,.release,.rust] | @tsv' "$recipe_dir/sources.json")
+[[ $repo =~ ^[a-z0-9-]+$ && $commit =~ ^[0-9a-f]{40}$ && $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ \
+    && $release =~ ^[1-9][0-9]*$ && $rust =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+if [[ $service == *remote-access ]]; then
+    # The runtime binaries and the units that call them must come from one source commit.
+    jq -e '[.["enzimos-remote-access"], .["enzimos-rust-remote-access"]]
+        | map([.repo // "enzimos-remote-access", .commit, .rust]) | unique | length == 1' \
+        "$recipe_dir/sources.json" > /dev/null
+    runtime=$(jq -er '.["enzimos-rust-remote-access"] | "\(.version)-\(.release)"' "$recipe_dir/sources.json")
+    if [[ $service == enzimos-remote-access ]]; then
+        dependencies=("enzimos-rust-remote-access=$runtime" "${dependencies[@]}")
+    fi
+fi
 export RUSTUP_TOOLCHAIN="$rust" CARGO_BUILD_JOBS=4 GIT_ALLOW_PROTOCOL=https
-source_url="https://github.com/enz1m/$service"
+source_url="https://github.com/enz1m/$repo"
 base="$HOME/host-service"
 source_dir="$base/source"
 protocol_root="$base/compositor"
@@ -89,6 +103,7 @@ payload="$assembly/payload"
 mkdir -p "$payload" "$output"
 copy() { install -Dm "$3" -- "$1" "$payload/$2"; }
 license=MIT
+options='!debug'
 case "$service" in
     enzimos-app-permissions)
         copy target/release/enzimos-app-permissions usr/bin/enzimos-app-permissions 0755
@@ -162,15 +177,43 @@ case "$service" in
         copy packaging/55-enzimos-sharing-firewall-info.rules usr/share/polkit-1/rules.d/55-enzimos-sharing-firewall-info.rules 0644
         for doc in docs/*.md; do copy "$doc" "usr/share/doc/$service/${doc#docs/}" 0644; done
         ;;
+    enzimos-rust-remote-access)
+        # The ISO runtime admission accepts exactly the listed binaries, their unstripped
+        # digests in the build registry, and the license.
+        options='!debug !strip'
+        spec=packaging/rust/runtime.json
+        jq -e --arg name "$service" --arg version "$version" '.schema == 1 and .package_name == $name
+            and .version == $version and .architecture == "x86_64" and .automatic_activation == false
+            and .resources == {}' "$spec" > /dev/null
+        component=$(jq -er .component "$spec")
+        mapfile -t dependencies < <(jq -er '.dependencies[]' "$spec")
+        artifacts='{}'
+        while IFS=$'\t' read -r binary path; do
+            copy "target/release/$binary" "$path" 0755
+            artifacts=$(jq -c --arg binary "$binary" --argjson bytes "$(stat -c %s -- "$payload/$path")" \
+                --arg sha "$(sha256sum -- "$payload/$path" | cut -d ' ' -f 1)" \
+                '.[$binary] = {bytes: $bytes, sha256: $sha, manifest: "Cargo.toml"}' <<< "$artifacts")
+        done < <(jq -er '.binaries | to_entries[] | [.key, .value] | @tsv' "$spec")
+        jq -n --arg component "$component" --arg source "$source_url" --arg commit "$commit" \
+            --argjson artifacts "$artifacts" \
+            '{schema:1,component:$component,source:$source,revision:$commit,artifacts:$artifacts,resources:{},
+              automatic_activation:false,installed_qualification:false,production_cutover:false}' \
+            > "$assembly/runtime-build.json"
+        copy "$assembly/runtime-build.json" "usr/share/enzimos/rust-candidates/$component/build.json" 0644
+        copy LICENSE "usr/share/licenses/$service/LICENSE" 0644
+        ;;
 esac
-for file in LICENSE*; do copy "$file" "usr/share/licenses/$service/$file" 0644; done
-copy README.md "usr/share/doc/$service/README.md" 0644
+if [[ $service != enzimos-rust-remote-access ]]; then
+    for file in LICENSE*; do copy "$file" "usr/share/licenses/$service/$file" 0644; done
+    copy README.md "usr/share/doc/$service/README.md" 0644
+fi
 cd "$assembly"
 {
     printf 'pkgname=%q\npkgver=%q\npkgrel=%q\npkgdesc=%q\nurl=%q\n' "$service" "$version" "$release" "$description" "$source_url"
     printf "arch=('x86_64')\nlicense=(%q)\n" "$license"
     printf 'depends=('; printf ' %q' "${dependencies[@]}"; printf ' )\n'
-    printf "options=(!debug)\npackage() { cp -a --no-preserve=ownership \"\$startdir/payload/.\" \"\$pkgdir/\"; }\n"
+    printf 'options=(%s)\n' "$options"
+    printf "package() { cp -a --no-preserve=ownership \"\$startdir/payload/.\" \"\$pkgdir/\"; }\n"
 } > PKGBUILD
 PKGDEST="$output" makepkg --nodeps --noconfirm --nosign
 package="$service-$version-$release-x86_64.pkg.tar.zst"

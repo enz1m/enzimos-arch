@@ -26,7 +26,14 @@
   "enzimos-remote-access": {
     "commit": "67455027a7f03551bd3c9681c06caeb8d447da95",
     "version": "0.1.0",
-    "release": 92,
+    "release": 93,
+    "rust": "1.95.0"
+  },
+  "enzimos-rust-remote-access": {
+    "repo": "enzimos-remote-access",
+    "commit": "67455027a7f03551bd3c9681c06caeb8d447da95",
+    "version": "0.2.0",
+    "release": 2,
     "rust": "1.95.0"
   }
 }

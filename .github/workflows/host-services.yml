@@ -21,6 +21,7 @@ jobs:
           - enzui-mcp-center
           - enzimos-phone-link
           - enzimos-remote-access
+          - enzimos-rust-remote-access
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -32,7 +33,8 @@ jobs:
         run: |
           gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" | jq -e '.commit.verification.verified'
           commit=$(jq -er --arg service "$SERVICE" '.[$service].commit' packaging/host-services/sources.json)
-          gh api "repos/enz1m/$SERVICE/commits/$commit" | jq -e '.commit.verification.verified'
+          repo=$(jq -er --arg service "$SERVICE" '.[$service].repo // $service' packaging/host-services/sources.json)
+          gh api "repos/enz1m/$repo/commits/$commit" | jq -e '.commit.verification.verified'
       - name: Prepare the pinned Arch build environment
         env:
           SERVICE: ${{ matrix.service }}

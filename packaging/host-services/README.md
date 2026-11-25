@@ -1,9 +1,10 @@
 # Native host service builds
 
 The **Build native host services** workflow builds App Permissions,
-Background Apps, MCP Center, Phone Link and Remote Access for Arch x86-64. The checked-in
-`sources.json` selects the exact signed GitHub commit, Rust toolchain, package
-version and release number for each service.
+Background Apps, MCP Center, Phone Link and Remote Access for Arch x86-64. The
+checked-in `sources.json` selects the exact signed GitHub commit, Rust
+toolchain, package version and release number for each package. An entry's
+`repo` names its GitHub repository when it differs from the package name.
 
 To prepare an update, review the upstream commit, update its entry and sign
 the change to this repository. Increase the package release number when a
@@ -19,10 +20,12 @@ container as a regular user. Each output consists of a Pacman archive, a
 independent job attests the output files. These are candidates for release
 review. The Pacman repository accepts a separately signed snapshot.
 
-The Remote Access package contains the system units, policies and the
-`enzimos-remote` launcher. It requires the exact `enzimos-rust-remote-access`
-build that contains its binaries. Rebuild that package from the same source
-commit, and update the dependency, when a pin change alters the binaries.
+Remote Access ships as two packages from one source commit.
+`enzimos-rust-remote-access` carries the binaries listed in the source's
+`packaging/rust/runtime.json`. `enzimos-remote-access` carries the system
+units, policies and the `enzimos-remote` launcher, and depends on that exact
+runtime version. The build stops unless both entries pin the same commit and
+toolchain. Increase both release numbers when changing the commit.
 
 Phone Link builds its Wayland workers using three checksummed protocol files
 from the public Hyprland revision pinned by the enzimOS shell build. Keep that

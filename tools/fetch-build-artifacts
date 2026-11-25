@@ -15,7 +15,8 @@ COHORTS = {
     "host-services": (
         "Build native host services",
         "host-service-",
-        {"enzimos-app-permissions", "enzimos-background-apps", "enzui-mcp-center", "enzimos-phone-link", "enzimos-remote-access"},
+        {"enzimos-app-permissions", "enzimos-background-apps", "enzui-mcp-center", "enzimos-phone-link",
+         "enzimos-remote-access", "enzimos-rust-remote-access"},
     ),
     "native-apps": (
         "Build native desktop apps",
