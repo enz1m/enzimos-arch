@@ -12,9 +12,9 @@
     "rust": "1.95.0"
   },
   "enzui-mcp-center": {
-    "commit": "cd9839c7769c3c2f1beb2e3f5809b3015f9c9571",
+    "commit": "ce643521bade46dbbcfa22e9d2e9c42a81eeaed4",
     "version": "0.1.0",
-    "release": 13,
+    "release": 14,
     "rust": "1.95.0"
   },
   "enzimos-phone-link": {
