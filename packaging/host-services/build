@@ -171,6 +171,9 @@ case "$service" in
             copy "$preset" "usr/lib/systemd/system-preset/${preset#packaging/}" 0644
         done
         copy packaging/enzimosRemote.xml usr/lib/firewalld/policies/enzimosRemote.xml 0644
+        for hook in packaging/*.hook; do
+            copy "$hook" "usr/share/libalpm/hooks/${hook#packaging/}" 0644
+        done
         copy packaging/org.enzimos.Remote1.service usr/share/dbus-1/system-services/org.enzimos.Remote1.service 0644
         copy packaging/org.enzimos.Remote1.conf usr/share/dbus-1/system.d/org.enzimos.Remote1.conf 0644
         copy packaging/org.enzimos.Remote1.policy usr/share/polkit-1/actions/org.enzimos.Remote1.policy 0644

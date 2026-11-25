@@ -23,9 +23,10 @@ review. The Pacman repository accepts a separately signed snapshot.
 Remote Access ships as two packages from one source commit.
 `enzimos-rust-remote-access` carries the binaries listed in the source's
 `packaging/rust/runtime.json`. `enzimos-remote-access` carries the system
-units, policies and the `enzimos-remote` launcher, and depends on that exact
-runtime version. The build stops unless both entries pin the same commit and
-toolchain. Increase both release numbers when changing the commit.
+units, policies, the source's pacman hooks and the `enzimos-remote` launcher,
+and depends on that exact runtime version. The build stops unless both entries
+pin the same commit and toolchain. Increase both release numbers when changing
+the commit.
 
 Phone Link builds its Wayland workers using three checksummed protocol files
 from the public Hyprland revision pinned by the enzimOS shell build. Keep that
