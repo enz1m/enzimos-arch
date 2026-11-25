@@ -42,7 +42,7 @@ case "$service" in
     *) echo 'Unknown host service.' >&2; exit 1 ;;
 esac
 if [[ $1 == install-deps ]]; then
-    pacman -Syu --noconfirm --needed git curl jq python rustup "${build_dependencies[@]}"
+    pacman -Syu --noconfirm --needed git curl jq python rustup binutils "${build_dependencies[@]}"
     exit
 fi
 [[ $EUID != 0 ]]
@@ -102,6 +102,23 @@ assembly="$base/assembly"
 payload="$assembly/payload"
 mkdir -p "$payload" "$output"
 copy() { install -Dm "$3" -- "$1" "$payload/$2"; }
+# Versioned sonames in makepkg's find_libdepends format, e.g. libssl.so=3-64,
+# for each library an installed package provides.
+soname_dependencies() {
+    local file soarch sofile dependency
+    declare -A needed=()
+    while IFS= read -rd '' file; do
+        soarch=$(LC_ALL=C readelf -h "$file" 2>/dev/null | sed -n 's/.*Class.*ELF\(32\|64\)/\1/p') || continue
+        for sofile in $(LC_ALL=C readelf -d "$file" | sed -nr 's/.*Shared library: \[(.*)\].*/\1/p'); do
+            if [[ $sofile =~ ^(.+\.so)\.([0-9]+(\.[0-9]+)*)$ ]]; then
+                needed["${BASH_REMATCH[1]}=${BASH_REMATCH[2]}-$soarch"]=1
+            fi
+        done
+    done < <(find "$1" -type f -print0)
+    for dependency in "${!needed[@]}"; do
+        if pacman -T "$dependency" > /dev/null; then printf '%s\n' "$dependency"; fi
+    done | LC_ALL=C sort
+}
 license=MIT
 options='!debug'
 case "$service" in
@@ -210,6 +227,8 @@ if [[ $service != enzimos-rust-remote-access ]]; then
     for file in LICENSE*; do copy "$file" "usr/share/licenses/$service/$file" 0644; done
     copy README.md "usr/share/doc/$service/README.md" 0644
 fi
+mapfile -t -O "${#dependencies[@]}" dependencies < <(soname_dependencies "$payload")
+wait "$!"
 cd "$assembly"
 {
     printf 'pkgname=%q\npkgver=%q\npkgrel=%q\npkgdesc=%q\nurl=%q\n' "$service" "$version" "$release" "$description" "$source_url"

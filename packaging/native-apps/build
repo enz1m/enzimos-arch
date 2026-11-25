@@ -45,7 +45,7 @@ case "$app" in
 esac
 
 if [[ $1 == install-deps ]]; then
-    pacman -Syu --noconfirm --needed git jq python rustup desktop-file-utils "${build_dependencies[@]}"
+    pacman -Syu --noconfirm --needed git jq python rustup desktop-file-utils binutils "${build_dependencies[@]}"
     exit
 fi
 [[ $EUID != 0 ]]
@@ -80,6 +80,23 @@ assembly="$base/assembly"
 payload="$assembly/payload"
 mkdir -p "$payload" "$output"
 copy() { install -Dm "$3" -- "$1" "$payload/$2"; }
+# Versioned sonames in makepkg's find_libdepends format, e.g. libssl.so=3-64,
+# for each library an installed package provides.
+soname_dependencies() {
+    local file soarch sofile dependency
+    declare -A needed=()
+    while IFS= read -rd '' file; do
+        soarch=$(LC_ALL=C readelf -h "$file" 2>/dev/null | sed -n 's/.*Class.*ELF\(32\|64\)/\1/p') || continue
+        for sofile in $(LC_ALL=C readelf -d "$file" | sed -nr 's/.*Shared library: \[(.*)\].*/\1/p'); do
+            if [[ $sofile =~ ^(.+\.so)\.([0-9]+(\.[0-9]+)*)$ ]]; then
+                needed["${BASH_REMATCH[1]}=${BASH_REMATCH[2]}-$soarch"]=1
+            fi
+        done
+    done < <(find "$1" -type f -print0)
+    for dependency in "${!needed[@]}"; do
+        if pacman -T "$dependency" > /dev/null; then printf '%s\n' "$dependency"; fi
+    done | LC_ALL=C sort
+}
 executable="/usr/lib/enzui/apps/$binary"
 case "$app" in
     enzimos-music|enzimos-store) executable="/usr/bin/$binary" ;;
@@ -137,6 +154,8 @@ while IFS=$'\t' read -r dependency manifest; do
         copy "$project/vendor/gst-curl/UPSTREAM.json" "$notice_dir/gst-curl/UPSTREAM.json" 0644
     fi
 done <<< "$git_dependencies"
+mapfile -t -O "${#dependencies[@]}" dependencies < <(soname_dependencies "$payload")
+wait "$!"
 cd "$assembly"
 {
     printf 'pkgname=%q\npkgver=%q\npkgrel=%q\npkgdesc=%q\nurl=%q\n' "$app" "$version" "$release" "$description" "$source_url"

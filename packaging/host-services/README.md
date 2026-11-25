@@ -20,6 +20,10 @@ container as a regular user. Each output consists of a Pacman archive, a
 independent job attests the output files. These are candidates for release
 review. The Pacman repository accepts a separately signed snapshot.
 
+Each package depends on the versioned sonames its ELF files link, such as
+`libssl.so=3-64`, whenever an installed build dependency provides them, so
+Pacman refuses it on a system with a different library major version.
+
 Remote Access ships as two packages from one source commit.
 `enzimos-rust-remote-access` carries the binaries listed in the source's
 `packaging/rust/runtime.json`. `enzimos-remote-access` carries the system
