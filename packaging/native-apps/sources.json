@@ -1,36 +1,36 @@
 {
   "enzimos-files": {
     "repo": "files",
-    "commit": "92de15f50c344d62d99f6a15e445328f8c40b61b",
-    "version": "0.1.0",
+    "commit": "97a2ce372543e0d03ed12f2ce3f13ec17a5f4919",
+    "version": "0.1.2",
     "release": 1,
     "rust": "1.99.1"
   },
   "enzimos-terminal": {
     "repo": "terminal",
-    "commit": "65148032f94c94a6f503ce5ea063856f343ee52e",
-    "version": "0.1.0",
+    "commit": "a51694f3f0a07ec767afb06feac1c7a1566011bc",
+    "version": "0.1.2",
     "release": 1,
     "rust": "1.99.1"
   },
   "enzimos-store": {
     "repo": "store",
-    "commit": "4063da80b4bc0040f76d0d60bbd21d4608dcbc4f",
+    "commit": "4441c436e38ced8a0cff099593ee1278af56b8a4",
     "version": "0.1.0",
-    "release": 2,
+    "release": 5,
     "rust": "1.99.1"
   },
   "enzimos-text": {
     "repo": "text",
-    "commit": "cbfaf302392a61d2be3819c73e105af727c51f6b",
-    "version": "0.1.0",
+    "commit": "8262cd3274180288ca34d8975892d493144aca71",
+    "version": "0.1.2",
     "release": 1,
     "rust": "1.99.1"
   },
   "enzimos-task-manager": {
     "repo": "task-manager",
-    "commit": "031047a38af4d906a1677d9b6082f7d8d9d9450b",
-    "version": "0.1.0",
+    "commit": "4742b103abb655f0c84e048fff63fd30f1b06b42",
+    "version": "0.1.1",
     "release": 1,
     "rust": "1.99.1"
   },
