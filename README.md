@@ -60,6 +60,13 @@ Older journals from the combined upgrade and install are limited to enzimOS
 repository packages on removal. Installations without an ownership journal, or
 with an interrupted journal, require manual review.
 
+The add-on leaves the host's power policy alone. Its bus-activated animation
+boost raises the CPU energy-performance preference for about 1.5 s while enzUI
+animates, then restores the previous value unless power-profiles-daemon,
+tuned, TLP or another tool changed it meanwhile. It does nothing on processors
+without that preference (acpi-cpufreq), under a performance or power-saver
+profile, while auto-cpufreq or auto-epp runs, or for other desktops' sessions.
+
 Phone Link is included as an optional service. Open Settings > Phone Link to
 turn it on and pair the Android app. It remains off until enabled, and streaming
 is suspended when the graphical session locks. Existing phone pairings are kept.
