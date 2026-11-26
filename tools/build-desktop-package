@@ -27,6 +27,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from desktop_companion import verify_xwayland
+
 DEFAULT_BUILD_TOOLS = Path(__file__).resolve().parent.parent.parent.parent / 'tools'
 
 # Components of the export left out on a system with its own login manager.
@@ -156,6 +158,7 @@ def build(export, output, release, build_tools=DEFAULT_BUILD_TOOLS):
     if manifest.get('schema') != 1 or manifest.get('source_tree_dirty') is not False:
         raise SystemExit('expected a schema 1 desktop export from a clean source tree')
     verify_export(export, manifest)
+    xwayland = verify_xwayland(export, manifest)
     files, links, private = [], [], set()
     for row in manifest['files']:
         if row.get('component') in EXCLUDED_COMPONENTS:
@@ -184,7 +187,7 @@ def build(export, output, release, build_tools=DEFAULT_BUILD_TOOLS):
     # no Vulkan driver (a VM without 3D); hardware drivers still win.
     depends = sorted({*depends, 'xdg-desktop-portal', 'xdg-desktop-portal-gtk', 'xdg-desktop-portal-hyprland',
                       'accountsservice', 'xdg-utils', 'polkit', 'udisks2', 'upower', 'vulkan-icd-loader', 'vulkan-swrast',
-                      'grim', 'hyprpicker', 'wl-clipboard'})
+                      'grim', 'hyprpicker', 'wl-clipboard', 'xkeyboard-config'})
     if missing:
         raise SystemExit('no installed package provides: ' + ', '.join(missing))
     # The export's notices are already among its files (usr/share/licenses/enzui-desktop).
@@ -197,7 +200,7 @@ def build(export, output, release, build_tools=DEFAULT_BUILD_TOOLS):
                               'firewalld: network trust (incoming connections)',
                               'fcitx5: input methods', 'wf-recorder: screen recording'))
     report = {'status': 'PASS-enzui-desktop-package-built', 'source_revision': manifest['source_revision'],
-              'bundled_libraries': sorted(carried),
+              'xwayland': xwayland, 'bundled_libraries': sorted(carried),
               'excluded_components': sorted(EXCLUDED_COMPONENTS), **row}
     (output / 'enzui-desktop/build.json').write_text(json.dumps(report, indent=2) + '\n')
     report['greeter'] = build_greeter(export, manifest, output / 'enzimos-greeter', release, package)

@@ -37,6 +37,8 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
+from desktop_companion import verify_stage_xwayland
+
 FINGERPRINT = '66CEB56F3018F39D2491A3B24C558611AFC55399'
 PUBLISHED = 'https://packages.enzim.dev/enzimos/x86_64/'
 DATABASES = ('enzimos.db', 'enzimos.files')
@@ -182,6 +184,7 @@ def fetch_published(output, env):
 def build(args):
     if args.output.exists():
         raise SystemExit('choose a new output directory')
+    verify_stage_xwayland(args.desktop_stage)
     env = dict(os.environ, GNUPGHOME=str(args.signer.resolve()))
     sign = ['gpg', '--batch', '--yes', '--local-user', FINGERPRINT]
     if args.passphrase_file:

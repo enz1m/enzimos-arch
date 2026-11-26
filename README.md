@@ -90,6 +90,11 @@ See the [host-service build recipes](packaging/host-services/README.md) and
 Verify a completed app build with `tools/fetch-build-artifacts native-apps RUN_ID OUTPUT`.
 
 Use a build machine that matches the target distribution's package libraries.
+Build the desktop export from the public Shell checkout using its pinned
+compositor, release and export scripts. The
+[Shell build guide](https://github.com/enz1m/enzimos-shell#xwayland-companion)
+lists the Xwayland build dependencies. The Shell build fetches and checks
+the public X.Org archive and applies the patch from the pinned fork.
 The desktop packager needs an enzUI desktop export and the enzimOS workspace's
 packaging and export-validation helpers. The repository builder takes component
 packages and their SHA-256 build reports from the enzimOS build.
@@ -105,7 +110,9 @@ tools/build-repo --reports /path/to/component-build-reports \
     --signer /path/to/signing-keyring --output out/repo
 ```
 
-The desktop packager verifies the producer's file and link inventory.
+The desktop packager verifies the producer's file and link inventory and
+requires the recorded Xwayland binary and license. The companion is installed
+beside the compositor under `/usr/lib/enzui/compositor/`.
 The repository builder checks component archives against their build reports
 before signing. Keep private signing keys outside the checkout. See
 [`test/README.md`](test/README.md) to try a build in a VM.
@@ -124,7 +131,9 @@ signed `enzimos-os` repository at `packages.enzim.dev/enzimos-os/x86_64`. It
 holds the installer, recovery and update runtimes, system policy, the
 greetd, keyring and portal replacements, the local AI packages, the recovery
 environment and two data packages: the staged desktop and the live installer
-runtime layout. Arch systems never configure it.
+runtime layout. The staged desktop must carry the matching Xwayland binary,
+license and export manifest from the Shell build. Arch systems never configure
+this repository.
 
 ```sh
 tools/build-os-repo --reports /path/to/build-report.json ... \
