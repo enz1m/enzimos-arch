@@ -5,7 +5,7 @@
 pkgbase=enzimos-meta
 pkgname=(enzimos-desktop enzimos-apps enzimos-ai enzimos-flatpak-remote)
 pkgver=0.1.0
-pkgrel=3
+pkgrel=4
 arch=('any')
 url='https://github.com/enz1m'
 license=('MIT')
@@ -23,7 +23,8 @@ package_enzimos-desktop() {
                 'networkmanager: network settings'
                 'bluez: Bluetooth settings'
                 'power-profiles-daemon: power modes'
-                'cups: printers')
+                'cups: printers'
+                'steam-devices: Steam Input and SteamVR device permissions ([multilib])')
 }
 
 package_enzimos-apps() {
