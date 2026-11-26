@@ -1,4 +1,10 @@
 {
+  "enzimos-agent-harness": {
+    "commit": "fd1eefff0817a6af46fdec9dc6e5214b320b73b4",
+    "version": "0.1.0",
+    "release": 92,
+    "rust": "1.95.0"
+  },
   "enzimos-app-permissions": {
     "commit": "7df9dcbe5710c7030220dfbe38be965c502a74d7",
     "version": "0.2.0",
@@ -9,6 +15,12 @@
     "commit": "9d622c049991e822f0330d1849ba2c5cefbbb7ef",
     "version": "0.2.0",
     "release": 2,
+    "rust": "1.95.0"
+  },
+  "enzimos-developer-tools": {
+    "commit": "f81510d4675bea6447c57cad234597dc0776572a",
+    "version": "0.1.0",
+    "release": 92,
     "rust": "1.95.0"
   },
   "enzui-mcp-center": {

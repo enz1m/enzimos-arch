@@ -5,6 +5,11 @@ set -euo pipefail
 recipe_dir=$(cd -- "$(dirname -- "$0")" && pwd)
 service=${2:-${HOST_SERVICE:-}}
 case "$service" in
+    enzimos-agent-harness)
+        description='enzimOS native agent tool harness'
+        dependencies=(glibc gcc-libs bubblewrap systemd)
+        build_dependencies=()
+        ;;
     enzimos-app-permissions)
         description='enzimOS native application permissions'
         dependencies=(glibc gcc-libs glib2 flatpak)
@@ -14,6 +19,11 @@ case "$service" in
         description='enzimOS background application controls'
         dependencies=(glibc gcc-libs dbus-units systemd)
         build_dependencies=(flatpak dbus)
+        ;;
+    enzimos-developer-tools)
+        description='enzimOS optional developer environment management'
+        dependencies=(glibc gcc-libs glib2 pacman shadow polkit dbus-broker-units systemd)
+        build_dependencies=(cairo glib2 libxcrypt openssl pango pkgconf)
         ;;
     enzui-mcp-center)
         description='Per-user enzUI capability broker and MCP stdio adapter'
@@ -91,6 +101,10 @@ cd "$source_dir"
 export SOURCE_DATE_EPOCH
 SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
 cargo build --release --locked --offline --workspace --all-features --bins
+if [[ $service == enzimos-agent-harness ]]; then
+    # The stdio integration tests spawn the example at its release binary path.
+    cargo build --release --locked --offline --example fake_mcp
+fi
 if [[ $service == enzimos-phone-link ]]; then
     cargo test --release --locked --offline --workspace --all-features --lib
 else
@@ -122,6 +136,13 @@ soname_dependencies() {
 license=MIT
 options='!debug'
 case "$service" in
+    enzimos-agent-harness)
+        for binary in enzimos-agent-harness enzimos-agent-harness-client; do
+            copy "target/release/$binary" "usr/bin/$binary" 0755
+        done
+        copy deploy/enzimos-agent-harness.service usr/lib/systemd/user/enzimos-agent-harness.service 0644
+        copy docs/PROTOCOL.md "usr/share/doc/$service/PROTOCOL.md" 0644
+        ;;
     enzimos-app-permissions)
         copy target/release/enzimos-app-permissions usr/bin/enzimos-app-permissions 0755
         ;;
@@ -136,6 +157,26 @@ case "$service" in
         copy packaging/systemd-user-sessions-background.conf usr/lib/systemd/system/systemd-user-sessions.service.d/20-enzimos-background-trust.conf 0644
         copy packaging/org.enzimos.Background1.service usr/share/dbus-1/services/org.enzimos.Background1.service 0644
         copy packaging/org.enzimos.Background1.json usr/share/enzui/lifecycle-callers/org.enzimos.Background1.json 0644
+        ;;
+    enzimos-developer-tools)
+        for binary in enzimos-developer-service enzimos-developer-worker; do
+            copy "target/release/$binary" "usr/lib/enzimos-developer/$binary" 0755
+        done
+        for binary in enzimos-developer enzimos-open-project; do
+            copy "target/release/$binary" "usr/bin/$binary" 0755
+        done
+        for unit in enzimos-developer.service enzimos-developer-job@.service; do
+            copy "packaging/$unit" "usr/lib/systemd/system/$unit" 0644
+        done
+        copy packaging/org.enzimos.Developer1.service usr/share/dbus-1/system-services/org.enzimos.Developer1.service 0644
+        copy packaging/org.enzimos.Developer1.conf usr/share/dbus-1/system.d/org.enzimos.Developer1.conf 0644
+        copy packaging/org.enzimos.Developer1.policy usr/share/polkit-1/actions/org.enzimos.Developer1.policy 0644
+        copy packaging/pacman.conf usr/lib/enzimos-developer/pacman.conf 0644
+        copy packaging/20-enzimos-developer.preset usr/lib/systemd/system-preset/20-enzimos-developer.preset 0644
+        copy packaging/mise-config.toml etc/mise/config.toml 0644
+        for doc in API.md ARCHITECTURE.md; do
+            copy "docs/$doc" "usr/share/doc/$service/$doc" 0644
+        done
         ;;
     enzui-mcp-center)
         license='MIT OR Apache-2.0'
@@ -234,6 +275,9 @@ cd "$assembly"
     printf 'pkgname=%q\npkgver=%q\npkgrel=%q\npkgdesc=%q\nurl=%q\n' "$service" "$version" "$release" "$description" "$source_url"
     printf "arch=('x86_64')\nlicense=(%q)\n" "$license"
     printf 'depends=('; printf ' %q' "${dependencies[@]}"; printf ' )\n'
+    if [[ $service == enzimos-developer-tools ]]; then
+        printf "backup=('etc/mise/config.toml')\n"
+    fi
     printf 'options=(%s)\n' "$options"
     printf "package() { cp -a --no-preserve=ownership \"\$startdir/payload/.\" \"\$pkgdir/\"; }\n"
 } > PKGBUILD

@@ -1,10 +1,11 @@
 # Native host service builds
 
-The **Build native host services** workflow builds App Permissions,
-Background Apps, MCP Center, Phone Link and Remote Access for Arch x86-64. The
-checked-in `sources.json` selects the exact signed GitHub commit, Rust
-toolchain, package version and release number for each package. An entry's
-`repo` names its GitHub repository when it differs from the package name.
+The **Build native host services** workflow builds Agent Harness, App
+Permissions, Background Apps, Developer Tools, MCP Center, Phone Link and
+Remote Access for Arch x86-64. The checked-in `sources.json` selects the exact
+signed GitHub commit, Rust toolchain, package version and release number for
+each package. An entry's `repo` names its GitHub repository when it differs from
+the package name.
 
 To prepare an update, review the upstream commit, update its entry and sign
 the change to this repository. Increase the package release number when a
@@ -20,9 +21,16 @@ container as a regular user. Each output consists of a Pacman archive, a
 independent job attests the output files. These are candidates for release
 review. The Pacman repository accepts a separately signed snapshot.
 
-Each package depends on the versioned sonames its ELF files link, such as
+The standard recipe adds versioned soname dependencies, such as
 `libssl.so=3-64`, whenever an installed build dependency provides them, so
 Pacman refuses it on a system with a different library major version.
+
+Agent Harness and Developer Tools share this cohort because both ship native
+systemd services and use the same locked Rust build, offline tests and Pacman
+packaging. They install the same files as the ISO builds and, like the other
+services, gain soname dependencies and stripped binaries. Developer Tools keeps
+Pacman's backup entry for `etc/mise/config.toml`. Their releases start one above
+the ISO packages, whose bytes differ.
 
 Remote Access ships as two packages from one source commit.
 `enzimos-rust-remote-access` carries the binaries listed in the source's

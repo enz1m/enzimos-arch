@@ -16,8 +16,10 @@ jobs:
       fail-fast: false
       matrix:
         service:
+          - enzimos-agent-harness
           - enzimos-app-permissions
           - enzimos-background-apps
+          - enzimos-developer-tools
           - enzui-mcp-center
           - enzimos-phone-link
           - enzimos-remote-access
