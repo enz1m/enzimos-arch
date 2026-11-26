@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+import json
+from pathlib import Path
+import runpy
+import tempfile
+
+
+def verify_desktop_dependencies():
+    root = Path(__file__).resolve().parent.parent
+    recipe = runpy.run_path(str(root / "tools/build-desktop-package"))
+    with tempfile.TemporaryDirectory() as temp:
+        work = Path(temp)
+        export = work / "export"
+        manifest = export / "usr/share/enzui/manifest.json"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text(json.dumps({"schema": 1, "source_tree_dirty": False,
+                                        "source_revision": "fixture", "files": []}))
+        tools = work / "tools"
+        tools.mkdir()
+        (tools / "stage_installed_desktop.py").write_text(
+            "def verify_export(export, manifest): pass\n")
+        (tools / "build_ai_packages.py").write_text(
+            "def package(output, name, files, depends, *args, **kwargs):\n"
+            "    output.mkdir(parents=True, exist_ok=True)\n"
+            "    return {'package': name, 'depends': depends}\n")
+        report = recipe["build"](export, work / "packages", 1, tools)
+        assert {"upower", "udisks2"} <= set(report["depends"]), report
+
+
+if __name__ == "__main__":
+    verify_desktop_dependencies()

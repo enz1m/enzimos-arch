@@ -183,7 +183,7 @@ def build(export, output, release, build_tools=DEFAULT_BUILD_TOOLS):
     # vulkan-swrast is the CPU Vulkan driver, as on enzimOS, for systems with
     # no Vulkan driver (a VM without 3D); hardware drivers still win.
     depends = sorted({*depends, 'xdg-desktop-portal', 'xdg-desktop-portal-gtk', 'xdg-desktop-portal-hyprland',
-                      'accountsservice', 'xdg-utils', 'polkit', 'vulkan-icd-loader', 'vulkan-swrast',
+                      'accountsservice', 'xdg-utils', 'polkit', 'udisks2', 'upower', 'vulkan-icd-loader', 'vulkan-swrast',
                       'grim', 'hyprpicker', 'wl-clipboard'})
     if missing:
         raise SystemExit('no installed package provides: ' + ', '.join(missing))
