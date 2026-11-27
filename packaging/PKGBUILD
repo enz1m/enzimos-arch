@@ -37,7 +37,7 @@ package_enzimos-ai() {
     depends=('enzimos-desktop' 'enzimos-inference-service' 'enzimos-ai-gateway'
              'enzimos-agent-harness' 'enzimos-dictation' 'enzimos-llama-cpu'
              'enzimos-whisper-cpu' 'enzimos-sherpa-onnx-cpu')
-    optdepends=('enzimos-ai-models: LFM3-VL-2B, MiniCPM5 1B and Whisper base, about 2 GB'
+    optdepends=('enzimos-ai-models: LFM3-VL-2B with vision and Whisper base, about 1.4 GB'
                 'enzimos-llama-vulkan: run models on the GPU')
 }
 

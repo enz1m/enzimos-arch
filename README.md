@@ -16,7 +16,7 @@ the matching test values. See the [VM testing guide](test/README.md).
 sudo ./enzimos-try install              # desktop: session, Settings, Files, Terminal, Store
 sudo ./enzimos-try install --apps       # plus Text and Task Manager
 sudo ./enzimos-try install --ai         # plus the on-device assistant and voice typing
-sudo ./enzimos-try install --models     # plus LFM3-VL-2B (default), MiniCPM5 1B and Whisper base (about 2 GB)
+sudo ./enzimos-try install --models     # plus LFM3-VL-2B with vision and Whisper base (about 1.4 GB)
 sudo ./enzimos-try install --flatpak-apps   # plus the enzimOS Flatpak apps
 sudo ./enzimos-try install --greeter    # plus the enzimOS login screen (greetd), from the next boot
 sudo ./enzimos-try install --replace-flatpaks   # uninstall Flatpak copies of Files, Text, ... (data kept)
