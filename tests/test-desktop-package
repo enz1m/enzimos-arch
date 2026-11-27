@@ -8,13 +8,18 @@ import tempfile
 def verify_desktop_dependencies():
     root = Path(__file__).resolve().parent.parent
     recipe = runpy.run_path(str(root / "tools/build-desktop-package"))
+    recipe["build"].__globals__["verify_xwayland"] = lambda export, manifest: {}
     with tempfile.TemporaryDirectory() as temp:
         work = Path(temp)
         export = work / "export"
         manifest = export / "usr/share/enzui/manifest.json"
         manifest.parent.mkdir(parents=True)
-        manifest.write_text(json.dumps({"schema": 1, "source_tree_dirty": False,
-                                        "source_revision": "fixture", "files": []}))
+        entries = [
+            {"path": "/" + path, "type": "file", "component": "agent", "mode": oct(mode)}
+            for path, mode in recipe["SETTINGS_ACTIVATION_FILES"].items()
+        ]
+        inventory = {"schema": 1, "source_tree_dirty": False, "source_revision": "fixture"}
+        manifest.write_text(json.dumps({**inventory, "files": entries}))
         tools = work / "tools"
         tools.mkdir()
         (tools / "stage_installed_desktop.py").write_text(
@@ -25,6 +30,17 @@ def verify_desktop_dependencies():
             "    return {'package': name, 'depends': depends}\n")
         report = recipe["build"](export, work / "packages", 1, tools)
         assert {"upower", "udisks2"} <= set(report["depends"]), report
+
+        missing = "usr/share/enzui/agent-apps/dev.enzui.Settings.json"
+        manifest.write_text(json.dumps({
+            **inventory, "files": [row for row in entries if row["path"] != "/" + missing],
+        }))
+        try:
+            recipe["build"](export, work / "invalid", 1, tools)
+        except SystemExit as error:
+            assert missing in str(error), error
+        else:
+            raise AssertionError("desktop package accepted an export without the Settings manifest")
 
 
 if __name__ == "__main__":

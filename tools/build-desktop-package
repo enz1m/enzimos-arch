@@ -44,6 +44,12 @@ TEST_ONLY = ('libgtest.so', 'libgmock.so')
 BUNDLED = ('libabsl_', 'libglslang', 'libSPIRV')
 # Libraries the export brings itself (the private compositor prefix).
 PRIVATE_PREFIX = '/usr/lib/enzui/compositor/'
+SETTINGS_ACTIVATION_FILES = {
+    'usr/lib/enzui/bin/enzui-settings': 0o755,
+    'usr/lib/systemd/user/enzui-agent-dev.enzui.Settings.service': 0o644,
+    'usr/share/dbus-1/services/dev.enzui.Settings.service': 0o644,
+    'usr/share/enzui/agent-apps/dev.enzui.Settings.json': 0o644,
+}
 
 
 def owner(path):
@@ -170,6 +176,11 @@ def build(export, output, release, build_tools=DEFAULT_BUILD_TOOLS):
             files.append((export / rel, rel, int(row['mode'], 8)))
         if row['path'].startswith(PRIVATE_PREFIX):
             private.add(Path(row['path']).name)
+    packaged_modes = {rel: mode for _, rel, mode in files}
+    missing_settings = sorted(path for path, mode in SETTINGS_ACTIVATION_FILES.items()
+                              if packaged_modes.get(path) != mode)
+    if missing_settings:
+        raise SystemExit('missing Settings activation files or incorrect modes: ' + ', '.join(missing_settings))
     # The manifest itself lists the files the package installs.
     manifest_rel = 'usr/share/enzui/manifest.json'
     if not any(rel == manifest_rel for _, rel, _ in files):
