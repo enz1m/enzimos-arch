@@ -1,0 +1,8 @@
+[Unit]
+Description=enzUI agent worker for Task Manager
+
+[Service]
+Type=exec
+ExecStart=/usr/lib/enzui/apps/task-manager-app --agent-background
+Environment=ENZUI_APP_CREDENTIAL=%S/enzui/apps/io.github.enzui.TaskManager.credential.json
+Environment=ENZUI_CENTER_SOCKET=%t/enzui/center.sock

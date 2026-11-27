@@ -29,9 +29,9 @@
   },
   "enzimos-task-manager": {
     "repo": "task-manager",
-    "commit": "4742b103abb655f0c84e048fff63fd30f1b06b42",
+    "commit": "b6674a1a9cab2393d4c79e1e7bbbb58819ae2d74",
     "version": "0.1.1",
-    "release": 2,
+    "release": 3,
     "rust": "1.99.1"
   },
   "enzimos-music": {

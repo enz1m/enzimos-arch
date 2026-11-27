@@ -40,6 +40,7 @@ case "$app" in
         ;;
     enzimos-task-manager)
         binary=task-manager-app entry=TaskManager description='enzUI system monitor'
+        features=(--features center)
         ;;
     *) echo 'Unknown native desktop app.' >&2; exit 1 ;;
 esac
@@ -123,6 +124,12 @@ case "$app" in
         ;;
 esac
 id="io.github.enzui.$entry"
+if [[ $app == enzimos-task-manager ]]; then
+    "target/release/$binary" --export-agent-manifest > "$assembly/$id.json"
+    copy "$assembly/$id.json" "usr/share/enzui/agent-apps/$id.json" 0644
+    unit="enzui-agent-$id.service"
+    copy "$recipe_dir/$unit" "usr/lib/systemd/user/$unit" 0644
+fi
 sed -E "s@^(Exec|TryExec)=$binary( |$)@\1=$executable\2@" "assets/$id.desktop" > "$assembly/$id.desktop"
 desktop-file-validate "$assembly/$id.desktop"
 copy "$assembly/$id.desktop" "usr/share/applications/$id.desktop" 0644
