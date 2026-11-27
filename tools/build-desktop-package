@@ -187,7 +187,7 @@ def build(export, output, release, build_tools=DEFAULT_BUILD_TOOLS):
     # no Vulkan driver (a VM without 3D); hardware drivers still win.
     depends = sorted({*depends, 'xdg-desktop-portal', 'xdg-desktop-portal-hyprland',
                       'accountsservice', 'xdg-utils', 'polkit', 'udisks2', 'upower', 'vulkan-icd-loader', 'vulkan-swrast',
-                      'grim', 'hyprpicker', 'wl-clipboard', 'xkeyboard-config'})
+                      'grim', 'hyprpicker', 'poppler', 'wl-clipboard', 'xkeyboard-config'})
     if missing:
         raise SystemExit('no installed package provides: ' + ', '.join(missing))
     # The export's notices are already among its files (usr/share/licenses/enzui-desktop).
