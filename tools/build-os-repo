@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: MIT
 """Add the signed `enzimos-os` system repository to a Pacman snapshot.
 
-    build-os-repo --reports PATH [--reports PATH ...] --desktop-stage DIR
-                  --runtime-layout DIR --release N --signer GNUPGHOME
+    build-os-repo --reports PATH [--reports PATH ...]
+                  (--desktop-stage DIR --runtime-layout DIR | --use-packaged-data)
+                  --release N --signer GNUPGHOME
                   [--passphrase-file FILE] --output OUT
 
 The system repository holds what the enzimOS installation media need beyond
@@ -107,8 +108,10 @@ def published_versions(directory):
     return versions
 
 
-def collect(report_dirs, published, excluded=frozenset()):
+def collect(report_dirs, published, excluded=frozenset(), data_release=None):
     found = {}
+    required = REQUIRED if data_release is None else REQUIRED | DATA.keys()
+    allowed = SYSTEM | ADD_ONS | (DATA.keys() if data_release is not None else set())
     reports = []
     for entry in map(Path, report_dirs):
         reports += sorted(entry.rglob('*.json')) if entry.is_dir() else [entry]
@@ -125,15 +128,17 @@ def collect(report_dirs, published, excluded=frozenset()):
                 if not path.name.endswith('.pkg.tar.zst') or not path.is_file() or path.is_symlink():
                     continue
                 name = package_info(path)['pkgname'][0]
-                if name not in SYSTEM | ADD_ONS or name in excluded:
+                if name not in allowed or name in excluded:
                     continue
                 if checksum(path) != row.get('sha256', row.get('package_sha256')):
                     raise SystemExit(f'{path} differs from its build report {report}')
                 version = package_info(path)['pkgver'][0]
+                if name in DATA and version != f'0.1.0-{data_release}':
+                    raise SystemExit(f'{path} does not match the selected media input release')
                 if name in found and not newer(version, found[name][1]):
                     continue
                 found[name] = (path, version)
-    if missing := sorted(REQUIRED - set(found) - excluded):
+    if missing := sorted(required - set(found) - excluded):
         raise SystemExit('missing system packages: ' + ', '.join(missing))
     for name in sorted(ADD_ONS & set(found)):
         if name in published and not newer(found[name][1], published[name]):
@@ -143,6 +148,8 @@ def collect(report_dirs, published, excluded=frozenset()):
 
 def data_package(name, source, release, output):
     """A data package holding SOURCE under /usr/share/enzimos-iso/<kind>."""
+    if name == 'enzimos-iso-desktop':
+        verify_stage_xwayland(source)
     with tempfile.TemporaryDirectory(prefix='enzimos-iso-package-') as temporary:
         root = Path(temporary)
         target = root / PREFIX / DATA[name]
@@ -184,21 +191,28 @@ def fetch_published(output, env):
 def build(args):
     if args.output.exists():
         raise SystemExit('choose a new output directory')
-    verify_stage_xwayland(args.desktop_stage)
+    stages = {'enzimos-iso-desktop': args.desktop_stage, 'enzimos-iso-runtime-layout': args.runtime_layout}
+    if args.use_packaged_data:
+        if any(stages.values()) or set(args.exclude) & DATA.keys():
+            raise SystemExit('use packaged data without stage directories or data package exclusions')
+    elif not all(stages.values()):
+        raise SystemExit('provide both stage directories or use packaged data')
     env = dict(os.environ, GNUPGHOME=str(args.signer.resolve()))
     sign = ['gpg', '--batch', '--yes', '--local-user', FINGERPRINT]
     if args.passphrase_file:
         sign += ['--pinentry-mode', 'loopback', '--passphrase-file', str(args.passphrase_file)]
     args.output.mkdir(parents=True)
     fetch_published(args.output, env)
-    packages = collect(args.reports, published_versions(args.output), frozenset(args.exclude))
+    packages = collect(args.reports, published_versions(args.output), frozenset(args.exclude),
+                       args.release if args.use_packaged_data else None)
     for name, source in sorted(packages.items()):
         shutil.copyfile(source, args.output / source.name)
         packages[name] = args.output / source.name
-    for name, source in (('enzimos-iso-desktop', args.desktop_stage), ('enzimos-iso-runtime-layout', args.runtime_layout)):
-        if not (Path(source) / ('usr' if name == 'enzimos-iso-desktop' else 'enzimos-installer/live')).is_dir():
-            raise SystemExit(f'{source} is not a {DATA[name]} tree')
-        packages[name] = data_package(name, Path(source).resolve(strict=True), args.release, args.output)
+    if not args.use_packaged_data:
+        for name, source in stages.items():
+            if not (source / ('usr' if name == 'enzimos-iso-desktop' else 'enzimos-installer/live')).is_dir():
+                raise SystemExit(f'{source} is not a {DATA[name]} tree')
+            packages[name] = data_package(name, source.resolve(strict=True), args.release, args.output)
     for path in packages.values():
         subprocess.run([*sign, '--detach-sign', '--output', str(path) + '.sig', str(path)], env=env, check=True)
     subprocess.run(['repo-add', '--quiet', '--include-sigs', str(args.output / 'enzimos-os.db.tar.gz'),
@@ -214,8 +228,10 @@ def build(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--reports', type=Path, action='append', required=True)
-    parser.add_argument('--desktop-stage', type=Path, required=True)
-    parser.add_argument('--runtime-layout', type=Path, required=True)
+    parser.add_argument('--desktop-stage', type=Path)
+    parser.add_argument('--runtime-layout', type=Path)
+    parser.add_argument('--use-packaged-data', action='store_true',
+                        help='take both media data packages from the verified build reports')
     parser.add_argument('--release', type=int, required=True)
     parser.add_argument('--signer', type=Path, required=True)
     parser.add_argument('--passphrase-file', type=Path)

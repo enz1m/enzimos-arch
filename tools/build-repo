@@ -24,7 +24,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-FINGERPRINT = '316DD17C64DB52ABEFA9B558AA8B1E969F33214C'
+FINGERPRINT = '66CEB56F3018F39D2491A3B24C558611AFC55399'
 # The enzimOS packages an Arch system may install. Everything that changes the
 # system itself (installer, recovery, update client, policies, greetd, portal
 # replacement) stays out.
@@ -141,6 +141,9 @@ def build(args):
         raise SystemExit('choose a new output directory')
     args.output.parent.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, GNUPGHOME=str(args.signer.resolve()))
+    sign = ['gpg', '--batch', '--yes', '--local-user', FINGERPRINT]
+    if args.passphrase_file:
+        sign += ['--pinentry-mode', 'loopback', '--passphrase-file', str(args.passphrase_file)]
     with tempfile.TemporaryDirectory(prefix='.enzimos-repo-', dir=args.output.parent) as temporary:
         staging = Path(temporary) / 'repository'
         repo = staging / 'enzimos' / 'x86_64'
@@ -150,11 +153,16 @@ def build(args):
             shutil.copyfile(source, target)
             if checksum(target) != digest:
                 raise SystemExit(f'{name} changed while staging')
-            subprocess.run(['gpg', '--batch', '--yes', '--local-user', FINGERPRINT, '--detach-sign',
+            subprocess.run([*sign, '--detach-sign',
                             '--output', str(target) + '.sig', str(target)], env=env, check=True)
-        subprocess.run(['repo-add', '--sign', '--key', FINGERPRINT, '--verify', str(repo / 'enzimos.db.tar.gz'),
+        subprocess.run(['repo-add', '--include-sigs', str(repo / 'enzimos.db.tar.gz'),
                         *sorted(str(p) for p in repo.glob('*.pkg.tar.zst'))], env=env, check=True,
                        stdout=subprocess.DEVNULL)
+        for name in ('enzimos.db', 'enzimos.files'):
+            archive = repo / (name + '.tar.gz')
+            subprocess.run([*sign, '--detach-sign', '--output', str(archive) + '.sig', str(archive)],
+                           env=env, check=True)
+            (repo / (name + '.sig')).symlink_to(archive.name + '.sig')
         with (staging / 'enzimos-packages.asc').open('w') as key:
             subprocess.run(['gpg', '--armor', '--export', FINGERPRINT], env=env, check=True, stdout=key)
         staging.rename(args.output)
@@ -171,5 +179,6 @@ if __name__ == '__main__':
     parser.add_argument('--desktop', type=Path, required=True)
     parser.add_argument('--meta', type=Path, required=True)
     parser.add_argument('--signer', type=Path, required=True)
+    parser.add_argument('--passphrase-file', type=Path)
     parser.add_argument('--output', type=Path, required=True)
     build(parser.parse_args())
