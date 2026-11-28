@@ -199,6 +199,9 @@ def build(export, output, release, build_tools=DEFAULT_BUILD_TOOLS):
     depends = sorted({*depends, 'xdg-desktop-portal', 'xdg-desktop-portal-hyprland',
                       'accountsservice', 'xdg-utils', 'polkit', 'udisks2', 'upower', 'vulkan-icd-loader', 'vulkan-swrast',
                       'grim', 'hyprpicker', 'poppler', 'wl-clipboard', 'xkeyboard-config'})
+    if any(destination == 'usr/lib/systemd/user/enzui-microphone-cleanup.service'
+           for _, destination, _ in files):
+        depends = sorted({*depends, 'pipewire', 'wireplumber', 'noise-suppression-for-voice'})
     if missing:
         raise SystemExit('no installed package provides: ' + ', '.join(missing))
     # The export's notices are already among its files (usr/share/licenses/enzui-desktop).
