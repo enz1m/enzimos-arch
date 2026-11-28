@@ -1,0 +1,55 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+
+keyring=/usr/share/pacman/keyrings
+home=/etc/pacman.d/gnupg
+[ "$(head -n 1 "$home/gpg.conf")" = 'trust-model direct' ]
+[ -f "$home/pubring.gpg" ] && [ -f "$home/trustdb.gpg" ] && [ ! -e "$home/pubring.kbx" ]
+install -d -m 0700 /run/enzimos
+umask 077
+exec 9>>/run/enzimos/operation.lock
+flock -w 60 9
+[ ! -e /var/lib/pacman/db.lck ]
+
+work=$(mktemp -d /run/enzimos-archive.XXXXXX)
+cleanup() {
+    find "$work" -mindepth 1 -maxdepth 1 -type f -delete
+    rmdir "$work"
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+gpg() {
+    /usr/bin/gpg --homedir "$work" --no-options --trust-model direct \
+        --batch --no-tty --no-autostart --no-auto-key-retrieve --auto-key-locate clear "$@"
+}
+primary_fingerprints() {
+    awk -F: '$1 == "pub" { primary = 1 } $1 == "fpr" && primary { print $10; primary = 0 }'
+}
+trust=$(cat "$keyring/enzimos-trusted")
+fingerprint=${trust%:5:}
+case "$fingerprint" in
+    ''|*[!0-9A-F]*) exit 1 ;;
+esac
+[ "${#fingerprint}" -eq 40 ] && [ "$trust" = "$fingerprint:5:" ]
+for file in pubring.gpg trustdb.gpg; do
+    cp "$home/$file" "$work/$file"
+done
+[ "$(gpg --with-colons --show-keys "$keyring/enzimos.gpg" | primary_fingerprints)" = "$fingerprint" ]
+gpg --list-packets "$keyring/enzimos.gpg" > "$work/packets"
+if grep -q '^:secret' "$work/packets"; then exit 1; fi
+if gpg --with-colons --list-keys "$fingerprint" > "$work/list" 2>/dev/null &&
+    grep -q '^pub:[fu]:' "$work/list"; then
+    exit 0
+fi
+
+# The installed authority uses direct trust and contains no local secret key.
+gpg --import "$keyring/enzimos.gpg"
+gpg --import-ownertrust "$keyring/enzimos-trusted"
+gpg --with-colons --list-keys "$fingerprint" > "$work/list"
+grep -q '^pub:[fu]:' "$work/list"
+[ ! -e /var/lib/pacman/db.lck ]
+for file in pubring.gpg trustdb.gpg; do
+    install -m 0600 "$work/$file" "$home/.$file.archive-new"
+    mv -fT "$home/.$file.archive-new" "$home/$file"
+done
