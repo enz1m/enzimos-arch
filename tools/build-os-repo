@@ -163,7 +163,7 @@ def data_package(name, source, release, output):
                 f'packager = enzimOS\nsize = {size}\narch = any\nlicense = MIT\n')
         (root / '.PKGINFO').write_text(info)
         members = ['.PKGINFO', 'usr']
-        common = ['--uid', '0', '--gid', '0', '--uname', 'root', '--gname', 'root']
+        common = ['--uid', '0', '--gid', '0', '--uname', 'root', '--gname', 'root', '--no-xattrs']
         subprocess.run(['bsdtar', '-czf', '.MTREE', '--format=mtree', *common,
                         '--options=!all,use-set,type,uid,gid,mode,time,size,sha256,link', *members],
                        cwd=root, check=True)
