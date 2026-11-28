@@ -45,6 +45,7 @@ PUBLISHED = 'https://packages.enzim.dev/enzimos/x86_64/'
 DATABASES = ('enzimos.db', 'enzimos.files')
 SYSTEM = {
     'enzimos-native-policy', 'enzimos-system-backend', 'enzimos-update-client',
+    'enzimos-archive-keyring',
     'enzimos-rust-packages', 'enzimos-rust-installer', 'enzimos-rust-remote-access',
     'enzimos-rust-updates', 'enzimos-rust-recovery-ui',
     'enzimos-keyring', 'enzimos-greetd', 'enzimos-xdg-desktop-portal-hyprland',

@@ -1,0 +1,11 @@
+[Unit]
+Description=Enroll the enzimOS Pacman archive signing key
+After=local-fs.target
+RequiresMountsFor=/etc/pacman.d/gnupg
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/enzimos/enzimos-archive-enroll
+RemainAfterExit=yes
+PrivateNetwork=yes
+UMask=0077

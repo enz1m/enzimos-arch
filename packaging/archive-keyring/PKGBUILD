@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+pkgname=enzimos-archive-keyring
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Public signing key and Pacman repositories for enzimOS'
+arch=(any)
+license=(MIT)
+depends=(pacman gnupg systemd util-linux)
+source=(enzimos.gpg enzimos-trusted pacman-repositories.conf enzimos-archive-enroll
+        enzimos-archive-enroll.service LICENSE)
+package() {
+    install -Dm644 "$srcdir/enzimos.gpg" "$pkgdir/usr/share/pacman/keyrings/enzimos.gpg"
+    install -Dm644 "$srcdir/enzimos-trusted" "$pkgdir/usr/share/pacman/keyrings/enzimos-trusted"
+    install -Dm644 "$srcdir/pacman-repositories.conf" "$pkgdir/usr/share/enzimos/pacman-repositories.conf"
+    install -Dm755 "$srcdir/enzimos-archive-enroll" "$pkgdir/usr/lib/enzimos/enzimos-archive-enroll"
+    local units="$pkgdir/usr/lib/systemd/system"
+    install -Dm644 "$srcdir/enzimos-archive-enroll.service" "$units/enzimos-archive-enroll.service"
+    install -d "$units/multi-user.target.wants"
+    ln -s ../enzimos-archive-enroll.service "$units/multi-user.target.wants/enzimos-archive-enroll.service"
+    install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
+sha256sums=('2ca0adfa9529bd51636f8d55ed384f0b25c1b32f7d784bef6278f96cd3a9f3de'
+            '5b2f3b30af3816735881d0715991afdc43ba08f2005ae6a8293a97d53cf69d44'
+            '3d2d8afcb77bbd8ecf766ed334d0c9c9c327e7ade64dac1a27e4ad1c14bbbcf1'
+            'c3dae03a0817f484c7d16431893f14549cb4e09da87c4cc9c408cfe686b333b5'
+            '0e65ed227e5025e39cb8f52a14514469f504fb7a0cf0ce979695324b7ab79b5f'
+            '6a889f8b703aaf652976d42007b63b8be8a4cf79c1e658406c8731505edf421c')
