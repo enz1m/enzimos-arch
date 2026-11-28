@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 pkgname=enzimos-llama-cpu
 pkgver=0.1.1
-pkgrel=1
+pkgrel=2
 pkgdesc='enzimOS CPU runtime for on-device text generation'
 arch=('x86_64')
 url='https://github.com/ggml-org/llama.cpp'
@@ -17,6 +17,7 @@ build() {
     test "$(git -C "$srcdir/llama.cpp" rev-parse HEAD)" = "$_commit"
     cmake -S "$srcdir/llama.cpp" -B "$srcdir/llama-build" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DGGML_AVX512=OFF \
+        -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON \
         -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON '-DCMAKE_INSTALL_RPATH=$ORIGIN' \
         -DGGML_VULKAN=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
         -DLLAMA_BUILD_SERVER=ON -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_UI=OFF \
