@@ -5,7 +5,7 @@
 pkgbase=enzimos-meta
 pkgname=(enzimos-desktop enzimos-apps enzimos-ai enzimos-flatpak-remote)
 pkgver=0.1.0
-pkgrel=4
+pkgrel=5
 arch=('any')
 url='https://github.com/enz1m'
 license=('MIT')
@@ -36,7 +36,7 @@ package_enzimos-ai() {
     pkgdesc='enzimOS on-device AI: assistant, local models service, voice typing'
     depends=('enzimos-desktop' 'enzimos-inference-service' 'enzimos-ai-gateway'
              'enzimos-agent-harness' 'enzimos-dictation' 'enzimos-llama-cpu'
-             'enzimos-whisper-cpu' 'enzimos-sherpa-onnx-cpu')
+             'enzimos-whisper-cpu' 'enzimos-sherpa-onnx-cpu' 'enzimos-streaming-speech')
     optdepends=('enzimos-ai-models: LFM3-VL-2B, MiniCPM5 1B and Whisper base, about 2 GB'
                 'enzimos-llama-vulkan: run models on the GPU')
 }

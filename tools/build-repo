@@ -33,7 +33,7 @@ COMPONENTS = {
     'enzimos-app-permissions', 'enzimos-background-apps', 'enzui-mcp-center',
     'enzimos-inference-service', 'enzimos-ai-gateway', 'enzimos-agent-harness', 'enzimos-dictation',
     'enzimos-llama-cpu', 'enzimos-llama-vulkan', 'enzimos-whisper-cpu', 'enzimos-sherpa-onnx-cpu',
-    'enzimos-ai-models', 'enzimos-phone-link',
+    'enzimos-ai-models', 'enzimos-streaming-speech', 'enzimos-phone-link',
 }
 
 # A desktop-only repository avoids staging model/runtime packages when testing

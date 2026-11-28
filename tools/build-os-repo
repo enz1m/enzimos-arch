@@ -51,7 +51,7 @@ SYSTEM = {
     'enzimos-mount', 'enzimos-aft-mtp', 'enzimos-icon-theme', 'enzimos-dev-monitor',
     'enzimos-activity-service', 'enzimos-recovery-env',
     'enzimos-inference-service', 'enzimos-ai-gateway', 'enzimos-dictation', 'enzimos-llama-cpu',
-    'enzimos-llama-vulkan', 'enzimos-whisper-cpu', 'enzimos-sherpa-onnx-cpu', 'enzimos-ai-models',
+    'enzimos-llama-vulkan', 'enzimos-whisper-cpu', 'enzimos-sherpa-onnx-cpu', 'enzimos-ai-models', 'enzimos-streaming-speech',
 }
 REQUIRED = SYSTEM - {'enzimos-xdg-desktop-portal-hyprland'}
 ADD_ONS = {

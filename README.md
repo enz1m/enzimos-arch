@@ -161,3 +161,13 @@ tests/test-flatpak-auto-update
 ## License
 
 MIT
+
+### Voice Typing packages
+
+The `enzimos-ai` metapackage includes offline English Voice Typing. Build
+`enzimos-streaming-speech` from the inference service's
+[`streaming-speech` directory](https://github.com/enz1m/enzimos-inference-service/tree/main/streaming-speech)
+and `enzimos-dictation` from the
+[Dictation checkout](https://github.com/enz1m/enzimos-dictation). Both directories
+provide a PKGBUILD. Include the package receipts in the system and add-on
+repository inputs.
