@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: GPL-2.0-only
+pkgname=enzimos-ipts-dkms
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Intel Precise Touch and Stylus driver from Linux Surface'
+arch=(any)
+url=https://github.com/linux-surface/linux-surface
+license=(GPL-2.0-only)
+depends=(dkms)
+makedepends=(git)
+optdepends=('linux-headers: build for the Arch Linux kernel'
+            'linux-lts-headers: build for the Arch Linux LTS kernel')
+_commit=9cd223c411499a6f66f2f5ae62e647a29390f9d0
+source=("ipts.patch::${url}/raw/${_commit}/patches/7.2/0005-ipts.patch"
+        dkms.conf)
+sha256sums=(8ef63cc490e512a204f0c6f84a0e554c268fbb8f70c3ac08709e80216d629508
+            ffa4cd7550dc11138c8b0c9ecc65769e7c83a0b3f8ae875229602a48cdc0e777)
+
+prepare() {
+    mkdir driver
+    cd driver
+    git apply --include='drivers/hid/ipts/**' ../ipts.patch
+    test -f drivers/hid/ipts/Makefile
+}
+
+package() {
+    local target="$pkgdir/usr/src/ipts-$pkgver"
+    install -d "$target"
+    cp -r "$srcdir/driver/drivers/hid/ipts/." "$target/"
+    sed "s/@VERSION@/$pkgver/" "$srcdir/dkms.conf" > "$target/dkms.conf"
+}

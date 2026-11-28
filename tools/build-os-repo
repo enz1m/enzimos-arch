@@ -49,12 +49,12 @@ SYSTEM = {
     'enzimos-rust-updates', 'enzimos-rust-recovery-ui',
     'enzimos-keyring', 'enzimos-greetd', 'enzimos-xdg-desktop-portal-hyprland',
     'enzimos-agent-harness', 'enzimos-developer-tools', 'enzimos-remote-access',
-    'enzimos-mount', 'enzimos-aft-mtp', 'enzimos-icon-theme', 'enzimos-dev-monitor',
+    'enzimos-mount', 'enzimos-aft-mtp', 'enzimos-icon-theme', 'enzimos-dev-monitor', 'enzimos-ipts-dkms',
     'enzimos-activity-service', 'enzimos-recovery-env',
     'enzimos-inference-service', 'enzimos-ai-gateway', 'enzimos-dictation', 'enzimos-llama-cpu',
     'enzimos-llama-vulkan', 'enzimos-whisper-cpu', 'enzimos-sherpa-onnx-cpu', 'enzimos-ai-models', 'enzimos-streaming-speech',
 }
-REQUIRED = SYSTEM - {'enzimos-xdg-desktop-portal-hyprland'}
+REQUIRED = SYSTEM - {'enzimos-xdg-desktop-portal-hyprland', 'enzimos-ipts-dkms'}
 ADD_ONS = {
     'enzimos-files', 'enzimos-text', 'enzimos-terminal', 'enzimos-store', 'enzimos-task-manager',
     'enzimos-app-permissions', 'enzimos-background-apps', 'enzui-mcp-center', 'enzimos-phone-link',
