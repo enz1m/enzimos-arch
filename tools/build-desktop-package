@@ -25,6 +25,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tarfile
 from pathlib import Path
 
 from desktop_companion import verify_xwayland
@@ -99,15 +100,35 @@ def provided_soname(package, soname):
     return wanted if wanted in provides else None
 
 
-def dependencies(manifest, private):
+def target_sonames(databases):
+    sonames = {}
+    for database in databases:
+        with tarfile.open(database) as archive:
+            for member in archive:
+                if not member.isfile() or not member.name.endswith('/desc'):
+                    continue
+                records = archive.extractfile(member).read().decode().split('\n\n')
+                provides = next((record.splitlines()[1:] for record in records
+                                 if record.startswith('%PROVIDES%\n')), ())
+                for provide in provides:
+                    library, separator, version = provide.partition('=')
+                    if separator and library.endswith('.so') and version.endswith('-64'):
+                        sonames[f'{library}.{version[:-3]}'] = provide
+    return sonames
+
+
+def dependencies(manifest, private, target_databases=()):
     needs = manifest.get('runtime_dependencies', {})
     packages, missing = set(), []
+    target_providers = target_sonames(target_databases)
     for soname in needs.get('shared_libraries', []):
         if soname in private or soname.startswith(TEST_ONLY):
             continue
         name = library_owner(soname)
         if name:
             packages.add(provided_soname(name, soname) or name)
+        elif soname in target_providers:
+            packages.add(target_providers[soname])
         else:
             missing.append(soname)
     for tool in (t for t in needs.get('tools', []) if t not in EXCLUDED_TOOLS):
@@ -148,7 +169,7 @@ def build_greeter(export, manifest, output, release, package):
     return row
 
 
-def build(export, output, release, build_tools=DEFAULT_BUILD_TOOLS):
+def build(export, output, release, build_tools=DEFAULT_BUILD_TOOLS, target_databases=()):
     for module in ('build_ai_packages.py', 'stage_installed_desktop.py'):
         if not (build_tools / module).is_file():
             raise SystemExit('pass --build-tools with the enzimOS workspace tools directory')
@@ -190,7 +211,7 @@ def build(export, output, release, build_tools=DEFAULT_BUILD_TOOLS):
     for soname, source in sorted(carried.items()):
         files.append((source, PRIVATE_PREFIX.lstrip('/') + 'prefix/lib/' + soname, 0o755))
         private.add(soname)
-    depends, missing = dependencies(manifest, private)
+    depends, missing = dependencies(manifest, private, target_databases)
     # Portal backends and desktop utilities are discovered at runtime.
     # Arch's xdg-desktop-portal-hyprland serves the portals enzUI's own do not
     # (screenshots, screen casting, global shortcuts) through enz-hyprland.
@@ -228,8 +249,10 @@ if __name__ == '__main__':
     parser.add_argument('--release', type=int, default=1)
     parser.add_argument('--build-tools', type=Path, default=DEFAULT_BUILD_TOOLS,
                         help='tools directory from the enzimOS build workspace')
+    parser.add_argument('--target-db', action='append', type=Path, default=[],
+                        help='resolve sonames built against staged target libraries absent from the host')
     args = parser.parse_args()
     report = build(args.export.resolve(strict=True), args.output.absolute(), args.release,
-                   args.build_tools.resolve())
+                   args.build_tools.resolve(), args.target_db)
     print(json.dumps({'desktop': report['package'], 'greeter': report['greeter']['package'],
                       'source_revision': report['source_revision']}))
